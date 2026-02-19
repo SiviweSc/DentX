@@ -29,7 +29,7 @@ export default function App() {
 
   // Show main website
   return (
-    <div className="min-h-screen bg-white">
+    <div>
       <Header onBookNow={handleBookNow} />
       <Hero onBookNow={handleBookNow} />
       <Services onBookNow={handleBookNow} />
