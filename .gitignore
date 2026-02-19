@@ -1,0 +1,66 @@
+# Node
+node_modules/
+/.pnp/
+.pnp.js
+
+# Build output
+dist/
+build/
+.out/
+
+# Vite cache
+.vite/
+
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Runtime files
+.env
+.env.local
+.env.*.local
+
+# Editor directories and files
+.vscode/
+.idea/
+*.sublime-workspace
+*.sublime-project
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Misc
+coverage/
+.cache/
+.eslintcache
+jest.config.*
+
+# Lock files (optional)
+# If you want to keep lockfiles, remove these lines
+# yarn.lock
+# package-lock.json
+# pnpm-lock.yaml
+
+# OneDrive
+~$*
+
+# Static assets build (if any)
+/public/dist/
+
+# TypeScript
+*.tsbuildinfo
+
+# Storybook
+.out/
+.storybook/
+
+# Optional: keep build artifacts out
+npm-packages-offline-cache/
+
+# End of file
