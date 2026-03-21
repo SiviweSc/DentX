@@ -7,9 +7,9 @@ interface HeroProps {
 
 export function Hero({ onBookNow }: HeroProps) {
   const scrollToContact = () => {
-    const element = document.getElementById('contact');
+    const element = document.getElementById("contact");
     if (element) {
-      element.scrollIntoView({ behavior: 'smooth' });
+      element.scrollIntoView({ behavior: "smooth" });
     }
   };
 
@@ -28,13 +28,16 @@ export function Hero({ onBookNow }: HeroProps) {
 
         <div className="relative z-10 container mx-auto px-4 text-center">
           <h1 className="text-5xl md:text-6xl text-white mb-6 max-w-4xl mx-auto">
-            Providing <span className="relative inline-block">
+            Providing{" "}
+            <span className="relative inline-block">
               <span className="relative z-10">YOU</span>
               <span className="absolute bottom-2 left-0 right-0 h-3 bg-[#9A7B1D] -z-0"></span>
-            </span> with integrated health care
+            </span>{" "}
+            With Integrated Health Care
           </h1>
           <p className="text-xl text-gray-200 mb-8 max-w-2xl mx-auto">
-            Zero-judgement, modern treatment and a friendly team committed to your wellbeing.
+            Offering professional morden treatment and a friendly team committed
+            to your well-being.
           </p>
         </div>
       </div>
@@ -55,13 +58,15 @@ export function Hero({ onBookNow }: HeroProps) {
                   <h3 className="text-lg mb-1 text-[#1A1A1A] group-hover:text-[#9A7B1D] transition-colors">
                     Book your appointment
                   </h3>
-                  <p className="text-sm text-gray-600">Schedule your visit today</p>
+                  <p className="text-sm text-gray-600">
+                    Schedule your visit today
+                  </p>
                 </div>
               </div>
             </button>
 
             <button
-              onClick={() => window.open('https://wa.me/27685340763', '_blank')}
+              onClick={() => window.open("https://wa.me/27685340763", "_blank")}
               className="bg-white/95 backdrop-blur-sm hover:bg-white p-6 rounded-xl shadow-lg hover:shadow-2xl transition-all group text-left border border-[#E8E2D5]"
             >
               <div className="flex items-start gap-4">
@@ -72,7 +77,9 @@ export function Hero({ onBookNow }: HeroProps) {
                   <h3 className="text-lg mb-1 text-[#1A1A1A] group-hover:text-[#9A7B1D] transition-colors">
                     Chat with us
                   </h3>
-                  <p className="text-sm text-gray-600">Quick WhatsApp support</p>
+                  <p className="text-sm text-gray-600">
+                    Quick WhatsApp support
+                  </p>
                 </div>
               </div>
             </button>
