@@ -36,8 +36,8 @@ export function Hero({ onBookNow }: HeroProps) {
             With Integrated Health Care
           </h1>
           <p className="text-xl text-gray-200 mb-8 max-w-2xl mx-auto">
-            Offering professional morden treatment and a friendly team committed
-            to your well-being.
+            Offering comprehensive professional modern treatment and a friendly
+            team committed to your well-being.
           </p>
         </div>
       </div>

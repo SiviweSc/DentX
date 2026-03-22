@@ -18,7 +18,11 @@ import {
 } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
 import { format } from "date-fns";
-import logo from "../../assets/cadae8615ee9587c8f09fa141332814475e43e29.png";
+
+const logo = new URL(
+  "../../assets/cadae8615ee9587c8f09fa141332814475e43e29.png",
+  import.meta.url,
+).href;
 
 interface BookingFormNewProps {
   onClose: () => void;
@@ -181,7 +185,7 @@ const PRACTITIONERS = {
 };
 
 const TIME_SLOTS = [
-  "08:30",
+  "09:00",
   "09:00",
   "09:30",
   "10:00",
@@ -197,6 +201,7 @@ const TIME_SLOTS = [
   "15:00",
   "15:30",
   "16:00",
+  "16:30",
 ];
 
 export function BookingFormNew({ onClose }: BookingFormNewProps) {
