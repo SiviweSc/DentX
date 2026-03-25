@@ -56,11 +56,16 @@ import {
   FileText,
   DollarSign,
   ClipboardList,
+  RefreshCw,
 } from "lucide-react";
 import { format } from "date-fns";
 import { toast } from "sonner";
 import { supabaseAdminApiBaseUrls } from "../../../utils/supabase/client";
-import logo from "../../assets/cadae8615ee9587c8f09fa141332814475e43e29.png";
+
+const logo = new URL(
+  "../../assets/cadae8615ee9587c8f09fa141332814475e43e29.png",
+  import.meta.url,
+).href;
 
 interface AdminDashboardProps {
   onClose: () => void;
@@ -186,6 +191,69 @@ const safeFormatDate = (
   }
 
   return format(parsed, formatPattern);
+};
+
+const normalizeLookupValue = (value: string) =>
+  value.toLowerCase().trim().replace(/\s+/g, "-").replace(/_/g, "-");
+
+const getBookingServiceValue = (booking: Booking) =>
+  booking.serviceType ||
+  (booking as Booking & { service_type?: string }).service_type ||
+  "";
+
+const getBookingPractitionerValue = (booking: Booking) =>
+  booking.practitionerType ||
+  (booking as Booking & { practitioner_type?: string }).practitioner_type ||
+  "";
+
+const getServiceTitle = (booking: Booking) => {
+  const serviceValue = getBookingServiceValue(booking);
+  if (!serviceValue) {
+    return "N/A";
+  }
+
+  const serviceKey = normalizeLookupValue(serviceValue);
+  const matchedService = SERVICES.find((service) => {
+    return (
+      normalizeLookupValue(service.id) === serviceKey ||
+      normalizeLookupValue(service.title) === serviceKey
+    );
+  });
+
+  return matchedService?.title || serviceValue;
+};
+
+const getPractitionerTitle = (booking: Booking) => {
+  const serviceValue = getBookingServiceValue(booking);
+  const practitionerValue = getBookingPractitionerValue(booking);
+
+  if (!serviceValue || !practitionerValue) {
+    return "N/A";
+  }
+
+  const serviceKey = normalizeLookupValue(serviceValue);
+  const matchedService = SERVICES.find((service) => {
+    return (
+      normalizeLookupValue(service.id) === serviceKey ||
+      normalizeLookupValue(service.title) === serviceKey
+    );
+  });
+
+  if (!matchedService) {
+    return practitionerValue;
+  }
+
+  const practitionerKey = normalizeLookupValue(practitionerValue);
+  const practitionerOptions =
+    PRACTITIONERS[matchedService.id as keyof typeof PRACTITIONERS] || [];
+  const matchedPractitioner = practitionerOptions.find((practitioner) => {
+    return (
+      normalizeLookupValue(practitioner.id) === practitionerKey ||
+      normalizeLookupValue(practitioner.title) === practitionerKey
+    );
+  });
+
+  return matchedPractitioner?.title || practitionerValue;
 };
 
 export function AdminDashboard({ onClose, authToken }: AdminDashboardProps) {
@@ -614,13 +682,25 @@ Booking via Admin Dashboard`;
                   <CardTitle>All Bookings</CardTitle>
                   <CardDescription>Manage appointment bookings</CardDescription>
                 </div>
-                <Button
-                  className="bg-[#9A7B1D] hover:bg-[#7d6418]"
-                  onClick={() => setShowAddBooking(true)}
-                >
-                  <Plus className="w-4 h-4 mr-2" />
-                  Add Booking
-                </Button>
+                <div className="flex gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={fetchData}
+                    disabled={loading}
+                  >
+                    <RefreshCw
+                      className={`w-4 h-4 ${loading ? "animate-spin" : ""}`}
+                    />
+                  </Button>
+                  <Button
+                    className="bg-[#9A7B1D] hover:bg-[#7d6418]"
+                    onClick={() => setShowAddBooking(true)}
+                  >
+                    <Plus className="w-4 h-4 mr-2" />
+                    Add Booking
+                  </Button>
+                </div>
                 <Dialog
                   open={showAddBooking}
                   onOpenChange={(open) => {
@@ -972,11 +1052,7 @@ Booking via Admin Dashboard`;
                             </TableCell>
                             <TableCell>
                               <div className="text-sm">
-                                {
-                                  SERVICES.find(
-                                    (s) => s.id === booking.serviceType,
-                                  )?.title
-                                }
+                                {getServiceTitle(booking)}
                               </div>
                             </TableCell>
                             <TableCell>
@@ -1207,20 +1283,11 @@ Booking via Admin Dashboard`;
                 <h4 className="font-semibold mb-2">Appointment Details</h4>
                 <div className="space-y-2 text-sm">
                   <div>
-                    <strong>Service:</strong>{" "}
-                    {
-                      SERVICES.find((s) => s.id === selectedBooking.serviceType)
-                        ?.title
-                    }
+                    <strong>Service:</strong> {getServiceTitle(selectedBooking)}
                   </div>
                   <div>
                     <strong>Practitioner:</strong>{" "}
-                    {
-                      PRACTITIONERS[
-                        selectedBooking.serviceType as keyof typeof PRACTITIONERS
-                      ]?.find((p) => p.id === selectedBooking.practitionerType)
-                        ?.title
-                    }
+                    {getPractitionerTitle(selectedBooking)}
                   </div>
                   <div>
                     <strong>Date:</strong>{" "}
