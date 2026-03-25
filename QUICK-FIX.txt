@@ -1,0 +1,106 @@
+═══════════════════════════════════════════════════════════════════════════
+  🚨 DENTX ADMIN LOGIN FIX - QUICK REFERENCE CARD 🚨
+═══════════════════════════════════════════════════════════════════════════
+
+PROBLEM: Login fails with "Login failed" message
+
+SOLUTION: Database tables don't exist. Create them with SQL.
+
+───────────────────────────────────────────────────────────────────────────
+📍 STEP 1: OPEN SUPABASE SQL EDITOR
+───────────────────────────────────────────────────────────────────────────
+
+Link: https://supabase.com/dashboard/project/emlobxpleotujitunkhs/sql/new
+
+───────────────────────────────────────────────────────────────────────────
+📍 STEP 2: COPY SQL
+───────────────────────────────────────────────────────────────────────────
+
+Location: /supabase/migrations/20260316_create_booking_tables.sql
+
+OR see full SQL in: LOGIN-FIX-NOW.md
+
+───────────────────────────────────────────────────────────────────────────
+📍 STEP 3: PASTE AND RUN
+───────────────────────────────────────────────────────────────────────────
+
+1. Paste SQL into editor
+2. Click "RUN" button
+3. Wait for "Success" message
+
+───────────────────────────────────────────────────────────────────────────
+📍 STEP 4: VERIFY
+───────────────────────────────────────────────────────────────────────────
+
+Go to: https://supabase.com/dashboard/project/emlobxpleotujitunkhs/editor
+
+Check for tables:
+✓ admin_users
+✓ bookings
+✓ patients
+✓ activity_log
+
+Click "admin_users" → Should see 1 row with "Admin"
+
+───────────────────────────────────────────────────────────────────────────
+📍 STEP 5: TEST LOGIN
+───────────────────────────────────────────────────────────────────────────
+
+Website → Footer → "Admin Login"
+
+Username: Admin
+Password: Dentx2026
+
+Click "Login" → Should work!
+
+───────────────────────────────────────────────────────────────────────────
+🛠️ TROUBLESHOOTING
+───────────────────────────────────────────────────────────────────────────
+
+Tables don't exist?
+→ Run SQL again, make sure you copied ALL of it
+
+Admin user missing?
+→ Run: INSERT INTO admin_users (username, password_hash, role)
+       VALUES ('Admin', 'Dentx2026', 'admin');
+
+Still fails?
+→ Open /TEST-LOGIN.html in browser
+→ Click "Test Login"
+→ Read the error message
+
+───────────────────────────────────────────────────────────────────────────
+📚 HELPFUL FILES
+───────────────────────────────────────────────────────────────────────────
+
+START-HERE.md           → Complete guide (5 minutes)
+LOGIN-FIX-NOW.md        → Copy/paste fix
+TEST-LOGIN.html         → Browser diagnostic tool
+TROUBLESHOOT-LOGIN.md   → Detailed troubleshooting
+VERIFY-DATABASE.md      → Check database setup
+
+───────────────────────────────────────────────────────────────────────────
+🔑 CREDENTIALS
+───────────────────────────────────────────────────────────────────────────
+
+Username: Admin    (capital A)
+Password: Dentx2026 (capital D)
+
+───────────────────────────────────────────────────────────────────────────
+🎯 WHAT YOU GET AFTER FIX
+───────────────────────────────────────────────────────────────────────────
+
+✓ Admin login working
+✓ Dashboard access
+✓ View all bookings
+✓ Add manual bookings (phone/walk-in)
+✓ Patient database
+✓ Activity tracking
+✓ WhatsApp notifications
+✓ Real-time slot blocking
+
+───────────────────────────────────────────────────────────────────────────
+
+          🚀 FIX TAKES 2 MINUTES - DO IT NOW! 🚀
+
+═══════════════════════════════════════════════════════════════════════════

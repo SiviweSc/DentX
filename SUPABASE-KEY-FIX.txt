@@ -1,0 +1,52 @@
+═══════════════════════════════════════════════════════════════
+🚨 SUPABASE ERROR - FIX IT NOW (2 Minutes)
+═══════════════════════════════════════════════════════════════
+
+The "Supabase error" you're seeing is because your API key is
+corrupted/malformed.
+
+───────────────────────────────────────────────────────────────
+STEP 1: GO TO SUPABASE
+───────────────────────────────────────────────────────────────
+
+Open this link:
+
+    https://supabase.com/dashboard/project/gldxgqcrdwcgjsbyeyma/settings/api
+
+───────────────────────────────────────────────────────────────
+STEP 2: COPY THE ANON KEY
+───────────────────────────────────────────────────────────────
+
+Look for:
+
+    Project API keys
+    
+    anon
+    public
+    
+    eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.ey...     [Copy]
+
+Click the [Copy] button next to the key.
+
+⚠️ IMPORTANT: Copy the "anon" key, NOT the "service_role" key!
+
+───────────────────────────────────────────────────────────────
+STEP 3: PASTE IT HERE
+───────────────────────────────────────────────────────────────
+
+Once you copy it, paste the key here and I'll update your
+configuration file.
+
+───────────────────────────────────────────────────────────────
+THAT'S IT!
+───────────────────────────────────────────────────────────────
+
+After updating with the correct key:
+✅ Supabase error will disappear
+✅ Database will work
+✅ Bookings will save
+✅ Everything will work!
+
+═══════════════════════════════════════════════════════════════
+ACTION: Go to that link, copy the anon key, paste it here!
+═══════════════════════════════════════════════════════════════

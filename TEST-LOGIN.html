@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DentX Login Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 50px auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        .test-box {
+            background: white;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+        }
+        h1 {
+            color: #9A7B1D;
+        }
+        button {
+            background: #9A7B1D;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+            margin: 5px;
+        }
+        button:hover {
+            background: #7d6418;
+        }
+        #result {
+            margin-top: 20px;
+            padding: 15px;
+            border-radius: 4px;
+            white-space: pre-wrap;
+            font-family: monospace;
+            font-size: 12px;
+        }
+        .success {
+            background: #d4edda;
+            border: 1px solid #c3e6cb;
+            color: #155724;
+        }
+        .error {
+            background: #f8d7da;
+            border: 1px solid #f5c6cb;
+            color: #721c24;
+        }
+        .info {
+            background: #d1ecf1;
+            border: 1px solid #bee5eb;
+            color: #0c5460;
+        }
+        input {
+            width: 100%;
+            padding: 10px;
+            margin: 5px 0 15px 0;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+        label {
+            font-weight: bold;
+            color: #333;
+        }
+    </style>
+</head>
+<body>
+    <div class="test-box">
+        <h1>🔍 DentX Login Diagnostic Tool</h1>
+        <p>This page will help diagnose login issues.</p>
+        
+        <h3>Step 1: Test Database Connection</h3>
+        <button onclick="testHealth()">Test Health Endpoint</button>
+        
+        <h3>Step 2: Test Login</h3>
+        <label for="username">Username:</label>
+        <input type="text" id="username" value="Admin" placeholder="Admin">
+        
+        <label for="password">Password:</label>
+        <input type="password" id="password" value="Dentx2026" placeholder="Dentx2026">
+        
+        <button onclick="testLogin()">Test Login</button>
+        
+        <h3>Results:</h3>
+        <div id="result" class="info">Click a button above to start testing...</div>
+    </div>
+
+    <script>
+        const PROJECT_ID = 'emlobxpleotujitunkhs';
+        const BASE_URL = `https://${PROJECT_ID}.supabase.co/functions/v1/make-server-34100c2d`;
+
+        function showResult(message, type = 'info') {
+            const result = document.getElementById('result');
+            result.textContent = message;
+            result.className = type;
+        }
+
+        async function testHealth() {
+            showResult('Testing health endpoint...', 'info');
+            
+            try {
+                const response = await fetch(`${BASE_URL}/health`);
+                const data = await response.json();
+                
+                if (data.status === 'ok') {
+                    showResult(
+                        '✅ SUCCESS!\n\n' +
+                        'Health check passed.\n' +
+                        'The Supabase Edge Function is running!\n\n' +
+                        'Response:\n' + JSON.stringify(data, null, 2),
+                        'success'
+                    );
+                } else {
+                    showResult(
+                        '⚠️ UNEXPECTED RESPONSE\n\n' +
+                        JSON.stringify(data, null, 2),
+                        'error'
+                    );
+                }
+            } catch (error) {
+                showResult(
+                    '❌ ERROR!\n\n' +
+                    'Could not connect to the server.\n\n' +
+                    'Error: ' + error.message + '\n\n' +
+                    'Possible causes:\n' +
+                    '1. Supabase Edge Function is not deployed\n' +
+                    '2. Network connection issue\n' +
+                    '3. CORS configuration problem',
+                    'error'
+                );
+            }
+        }
+
+        async function testLogin() {
+            const username = document.getElementById('username').value;
+            const password = document.getElementById('password').value;
+            
+            showResult(
+                `Testing login...\n\nUsername: ${username}\nPassword: ${'*'.repeat(password.length)}`,
+                'info'
+            );
+            
+            try {
+                console.log('Attempting login to:', `${BASE_URL}/auth/login`);
+                
+                const response = await fetch(`${BASE_URL}/auth/login`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ username, password })
+                });
+                
+                console.log('Response status:', response.status);
+                
+                const data = await response.json();
+                console.log('Response data:', data);
+                
+                if (data.success) {
+                    showResult(
+                        '✅ LOGIN SUCCESSFUL!\n\n' +
+                        'Username: ' + data.user.username + '\n' +
+                        'Role: ' + data.user.role + '\n\n' +
+                        'Token: ' + data.token.substring(0, 20) + '...\n\n' +
+                        'Full Response:\n' + JSON.stringify(data, null, 2),
+                        'success'
+                    );
+                } else {
+                    showResult(
+                        '❌ LOGIN FAILED\n\n' +
+                        'Status: ' + response.status + '\n' +
+                        'Error: ' + (data.error || 'Unknown error') + '\n' +
+                        'Hint: ' + (data.hint || 'No hint provided') + '\n\n' +
+                        'Full Response:\n' + JSON.stringify(data, null, 2) + '\n\n' +
+                        '🔍 Troubleshooting:\n' +
+                        '1. Check if admin_users table exists in Supabase\n' +
+                        '2. Verify admin user exists: SELECT * FROM admin_users;\n' +
+                        '3. Make sure username is "Admin" (capital A)\n' +
+                        '4. Make sure password is exactly "Dentx2026"',
+                        'error'
+                    );
+                }
+            } catch (error) {
+                showResult(
+                    '❌ REQUEST ERROR!\n\n' +
+                    'Could not send login request.\n\n' +
+                    'Error: ' + error.message + '\n\n' +
+                    'Possible causes:\n' +
+                    '1. Supabase Edge Function not deployed\n' +
+                    '2. Network connection issue\n' +
+                    '3. Invalid endpoint URL',
+                    'error'
+                );
+            }
+        }
+
+        // Add keyboard support
+        document.getElementById('password').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                testLogin();
+            }
+        });
+    </script>
+</body>
+</html>

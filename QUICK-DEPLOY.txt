@@ -1,0 +1,245 @@
+═══════════════════════════════════════════════════════════════════════════════
+                    DENTX QUARTERS - AFRIHOST QUICK DEPLOY
+═══════════════════════════════════════════════════════════════════════════════
+
+📋 ULTRA-QUICK 3-STEP DEPLOYMENT
+═══════════════════════════════════════════════════════════════════════════════
+
+STEP 1: BUILD
+─────────────────────────────────────────────────────────────────────────────
+Open Terminal/Command Prompt in project folder:
+
+  npm install
+  npm run build
+
+✅ Creates 'dist' folder with your website
+⏱️ Takes 2-3 minutes
+
+STEP 2: UPLOAD TO AFRIHOST
+─────────────────────────────────────────────────────────────────────────────
+1. Login: https://clientzone.afrihost.com
+2. Click: cPanel → File Manager
+3. Go to: public_html
+4. Delete: All existing files (if any)
+5. Upload: CONTENTS of 'dist' folder
+   - index.html
+   - .htaccess
+   - assets/ folder (with everything inside)
+
+✅ Files uploaded to public_html (NOT in a subfolder!)
+⏱️ Takes 5-10 minutes
+
+STEP 3: TEST
+─────────────────────────────────────────────────────────────────────────────
+Visit: https://dentxquarters.co.za
+
+✅ Website should load!
+⏱️ Takes 30 seconds
+
+═══════════════════════════════════════════════════════════════════════════════
+
+📁 CORRECT FILE STRUCTURE AFTER UPLOAD
+═══════════════════════════════════════════════════════════════════════════════
+
+✅ CORRECT:
+public_html/
+├── .htaccess
+├── index.html
+└── assets/
+    ├── index-abc123.css
+    ├── index-xyz789.js
+    └── ...
+
+❌ WRONG:
+public_html/
+└── dist/                    ← Don't upload dist folder itself!
+    ├── index.html
+    └── assets/
+
+❌ WRONG:
+public_html/
+├── src/                     ← Don't upload source code!
+├── node_modules/
+└── package.json
+
+═══════════════════════════════════════════════════════════════════════════════
+
+🆘 TROUBLESHOOTING
+═══════════════════════════════════════════════════════════════════════════════
+
+BLANK PAGE?
+→ Check files are in public_html (not in dist subfolder)
+→ Clear browser cache (Ctrl+F5)
+→ Read: FIX-BLANK-WEBSITE.md
+
+404 ERROR?
+→ Check .htaccess file exists in public_html
+→ Enable "Show Hidden Files" in File Manager
+→ Contact Afrihost to enable mod_rewrite
+
+BOOKING FORM NOT WORKING?
+→ Verify .htaccess uploaded
+→ Check routing rules in .htaccess
+→ Test on different browsers
+
+═══════════════════════════════════════════════════════════════════════════════
+
+📞 SUPPORT CONTACTS
+═══════════════════════════════════════════════════════════════════════════════
+
+Afrihost Support:
+  Phone: 087 470 0000
+  Email: support@afrihost.com
+  Portal: https://clientzone.afrihost.com
+
+DentX Quarters:
+  Phone: +27 68 534 0763
+  Email: admin@dentxquarters.co.za
+
+Documentation:
+  Read: AFRIHOST-DEPLOYMENT.md (complete guide)
+  Read: FIX-BLANK-WEBSITE.md (troubleshooting)
+
+═══════════════════════════════════════════════════════════════════════════════
+
+✅ DEPLOYMENT CHECKLIST
+═══════════════════════════════════════════════════════════════════════════════
+
+PRE-BUILD:
+[ ] Node.js installed
+[ ] Project downloaded
+[ ] Terminal opened
+
+BUILD:
+[ ] npm install completed
+[ ] npm run build completed
+[ ] dist folder created
+
+UPLOAD:
+[ ] Logged into Afrihost cPanel
+[ ] Navigated to public_html
+[ ] Deleted existing files
+[ ] Uploaded contents of dist folder
+[ ] index.html in public_html (root level)
+[ ] .htaccess in public_html (root level)
+[ ] assets folder in public_html (root level)
+
+VERIFY:
+[ ] Website loads at dentxquarters.co.za
+[ ] All sections visible
+[ ] Booking form works
+[ ] WhatsApp link works
+[ ] Phone numbers clickable
+[ ] Instagram link works
+[ ] Mobile responsive
+[ ] No console errors (F12)
+
+OPTIONAL:
+[ ] SSL/HTTPS enabled
+[ ] Force HTTPS in .htaccess
+[ ] Green padlock in browser
+
+═══════════════════════════════════════════════════════════════════════════════
+
+🎯 WHAT YOU'RE UPLOADING
+═══════════════════════════════════════════════════════════════════════════════
+
+FILE SIZES (Approximate):
+  index.html:     2-3 KB
+  .htaccess:      1-2 KB
+  index-xxx.css:  150-200 KB
+  index-xxx.js:   600-800 KB
+  TOTAL:          ~1-2 MB
+
+WHAT'S INCLUDED:
+✅ Complete website (all sections)
+✅ Booking form (4 steps)
+✅ WhatsApp integration
+✅ Mobile responsive design
+✅ Brand colors (gold #9A7B1D)
+✅ All real content
+✅ Instagram integration
+✅ Testimonials carousel
+✅ Team section
+✅ Services showcase
+
+═══════════════════════════════════════════════════════════════════════════════
+
+⚡ COMMANDS QUICK REFERENCE
+═══════════════════════════════════════════════════════════════════════════════
+
+Install dependencies:
+  npm install
+
+Build for production:
+  npm run build
+
+Test locally (optional):
+  npm run dev              (development server)
+  npm run preview          (test production build)
+
+Clean reinstall (if errors):
+  rm -rf node_modules      (Mac/Linux)
+  rmdir /s node_modules    (Windows)
+  npm install
+
+═══════════════════════════════════════════════════════════════════════════════
+
+🌐 IMPORTANT URLS
+═══════════════════════════════════════════════════════════════════════════════
+
+Your Website:
+  https://dentxquarters.co.za
+
+Afrihost:
+  Client Zone: https://clientzone.afrihost.com
+  Support: https://help.afrihost.com
+
+Social Media:
+  Instagram: @dentxquarters
+  https://www.instagram.com/dentxquarters/
+
+Testing Tools:
+  Speed Test: https://pagespeed.web.dev
+  GTmetrix: https://gtmetrix.com
+
+═══════════════════════════════════════════════════════════════════════════════
+
+📖 DOCUMENTATION FILES
+═══════════════════════════════════════════════════════════════════════════════
+
+START HERE:
+  📖 DEPLOYMENT-PACKAGE-README.md  (Package overview)
+  📖 AFRIHOST-DEPLOYMENT.md        (Complete Afrihost guide)
+  📖 QUICK-DEPLOY.txt              (This file)
+
+GUIDES:
+  �� START-HERE.md                 (Simple 3-step guide)
+  📖 FIX-BLANK-WEBSITE.md          (Blank page troubleshooting)
+  📖 UPLOAD-GUIDE.md               (What to upload)
+  📖 FINAL-DEPLOYMENT-CHECKLIST.md (Complete checklist)
+
+REFERENCE:
+  📖 IMPORTANT-READ-THIS.md        (Why no conversion needed)
+  📖 CONVERSION-NOT-NEEDED.md      (Technical explanation)
+  📖 VERIFY-BUILT-FILES.md         (Proof it's HTML/CSS/JS)
+
+═══════════════════════════════════════════════════════════════════════════════
+
+🎉 YOU'RE READY!
+═══════════════════════════════════════════════════════════════════════════════
+
+Your website is:
+✅ Complete
+✅ Tested
+✅ Optimized
+✅ Ready to deploy
+
+Total time: 15-30 minutes
+Next step: Build and upload!
+
+GOOD LUCK! 🚀
+
+═══════════════════════════════════════════════════════════════════════════════
+Version: 1.0.0 | Updated: Feb 18, 2026 | Status: Production Ready
+═══════════════════════════════════════════════════════════════════════════════

@@ -1,0 +1,1350 @@
+import { useState, useEffect } from "react";
+import { Button } from "./ui/button";
+import { Badge } from "./ui/badge";
+import { Card, CardContent, CardHeader, CardTitle } from "./ui/card";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from "./ui/dialog";
+import {
+  Calendar as CalendarIcon,
+  Users,
+  Activity as ActivityIcon,
+  LogOut,
+  LayoutDashboard,
+  BookOpen,
+  Building2,
+  ClipboardList,
+  Clock,
+  Phone,
+  Mail,
+  User,
+  RefreshCw,
+  Check,
+  X,
+  Calendar,
+  History,
+} from "lucide-react";
+import { supabase } from "../../../utils/supabase/client";
+import { format } from "date-fns";
+import { toast } from "sonner";
+import logo from "../../assets/cadae8615ee9587c8f09fa141332814475e43e29.png";
+
+interface AdminDashboardProps {
+  onClose: () => void;
+  authToken: string;
+}
+
+export function AdminDashboard({
+  onClose,
+  authToken: _authToken,
+}: AdminDashboardProps) {
+  const [activeSection, setActiveSection] = useState("dashboard");
+
+  const menuItems = [
+    { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
+    { id: "bookings", label: "Bookings", icon: CalendarIcon },
+    { id: "patients", label: "Patients", icon: Users },
+    { id: "practice", label: "Practice", icon: Building2 },
+    { id: "activity", label: "Activity Log", icon: ActivityIcon },
+    { id: "settings", label: "Settings", icon: ClipboardList },
+  ];
+
+  return (
+    <div className="flex h-screen bg-gray-50">
+      {/* Left Sidebar */}
+      <aside className="w-64 bg-white border-r border-gray-200 flex flex-col">
+        {/* Logo */}
+        <div className="p-6 border-b border-gray-200">
+          <img src={logo} alt="DentX Quarters" className="h-12" />
+        </div>
+
+        {/* Navigation */}
+        <nav className="flex-1 overflow-y-auto p-4">
+          <div className="space-y-1">
+            {menuItems.map((item) => {
+              const Icon = item.icon;
+              return (
+                <button
+                  key={item.id}
+                  onClick={() => setActiveSection(item.id)}
+                  className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${
+                    activeSection === item.id
+                      ? "bg-[#9A7B1D] text-white"
+                      : "text-gray-700 hover:bg-gray-100"
+                  }`}
+                >
+                  <Icon className="w-5 h-5" />
+                  <span className="font-medium">{item.label}</span>
+                </button>
+              );
+            })}
+          </div>
+        </nav>
+
+        {/* Logout */}
+        <div className="p-4 border-t border-gray-200">
+          <Button
+            onClick={onClose}
+            variant="outline"
+            className="w-full flex items-center justify-center gap-2"
+          >
+            <LogOut className="w-4 h-4" />
+            Logout
+          </Button>
+        </div>
+      </aside>
+
+      {/* Main Content */}
+      <div className="flex-1 flex flex-col overflow-hidden">
+        {/* Top Bar */}
+        <header className="bg-white border-b border-gray-200 px-8 py-4 flex items-center justify-between">
+          <div>
+            <h1 className="text-2xl font-bold text-gray-900">
+              {menuItems.find((item) => item.id === activeSection)?.label ||
+                "Dashboard"}
+            </h1>
+          </div>
+          <div className="flex items-center gap-4">
+            <div className="text-sm text-gray-600">
+              Welcome, <span className="font-semibold">Admin</span>
+            </div>
+          </div>
+        </header>
+
+        {/* Content Area */}
+        <main className="flex-1 overflow-y-auto p-8">
+          {activeSection === "dashboard" && <DashboardContent />}
+          {activeSection === "bookings" && <BookingsContent />}
+          {activeSection === "patients" && <PatientsContent />}
+          {activeSection === "practice" && <PracticeManagementContent />}
+          {activeSection === "activity" && <ActivityContent />}
+          {activeSection === "settings" && <SettingsContent />}
+        </main>
+      </div>
+    </div>
+  );
+}
+
+function DashboardContent() {
+  const [stats, setStats] = useState({
+    totalBookings: 0,
+    pendingBookings: 0,
+    totalPatients: 0,
+    newPatients: 0,
+    todayAppointments: 0,
+    completedToday: 0,
+  });
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    fetchStats();
+  }, []);
+
+  const fetchStats = async () => {
+    try {
+      setLoading(true);
+
+      // Fetch total bookings and pending count
+      const { data: bookingsData, error: bookingsError } = await supabase
+        .from("bookings")
+        .select("status, created_at, date");
+
+      // Fetch total patients
+      const { data: patientsData, error: patientsError } = await supabase
+        .from("patients")
+        .select("created_at");
+
+      if (!bookingsError && bookingsData) {
+        const totalBookings = bookingsData.length;
+        const pendingBookings = bookingsData.filter(
+          (b) => b.status === "pending",
+        ).length;
+
+        // Today's appointments
+        const today = new Date().toISOString().split("T")[0];
+        const todayAppointments = bookingsData.filter(
+          (b) => b.date === today,
+        ).length;
+        const completedToday = bookingsData.filter(
+          (b) => b.date === today && b.status === "completed",
+        ).length;
+
+        setStats((prev) => ({
+          ...prev,
+          totalBookings,
+          pendingBookings,
+          todayAppointments,
+          completedToday,
+        }));
+      }
+
+      if (!patientsError && patientsData) {
+        const totalPatients = patientsData.length;
+
+        // New patients this month
+        const now = new Date();
+        const firstDayOfMonth = new Date(
+          now.getFullYear(),
+          now.getMonth(),
+          1,
+        ).toISOString();
+        const newPatients = patientsData.filter(
+          (p) => p.created_at >= firstDayOfMonth,
+        ).length;
+
+        setStats((prev) => ({
+          ...prev,
+          totalPatients,
+          newPatients,
+        }));
+      }
+    } catch (err) {
+      console.error("Error fetching stats:", err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="space-y-6">
+      {/* Stats Cards */}
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium">
+              Total Bookings
+            </CardTitle>
+            <CalendarIcon className="h-4 w-4 text-muted-foreground" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold">
+              {loading ? "..." : stats.totalBookings}
+            </div>
+            <p className="text-xs text-muted-foreground mt-1">
+              {stats.pendingBookings} pending
+            </p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium">
+              Total Patients
+            </CardTitle>
+            <Users className="h-4 w-4 text-muted-foreground" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold">
+              {loading ? "..." : stats.totalPatients}
+            </div>
+            <p className="text-xs text-muted-foreground mt-1">
+              {stats.newPatients} new this month
+            </p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium">
+              Today's Appointments
+            </CardTitle>
+            <Clock className="h-4 w-4 text-muted-foreground" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold">
+              {loading ? "..." : stats.todayAppointments}
+            </div>
+            <p className="text-xs text-muted-foreground mt-1">
+              {stats.completedToday} completed
+            </p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium">This Week</CardTitle>
+            <Calendar className="h-4 w-4 text-muted-foreground" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold">{loading ? "..." : "12"}</div>
+            <p className="text-xs text-muted-foreground mt-1">
+              Appointments scheduled
+            </p>
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* Weekly Calendar */}
+      <Card>
+        <CardHeader>
+          <CardTitle>Weekly Calendar</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <WeeklyCalendar />
+        </CardContent>
+      </Card>
+
+      {/* Recent Activity */}
+      <Card>
+        <CardHeader>
+          <CardTitle>Recent Activity</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <p className="text-center py-8 text-gray-500">No recent activity</p>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+function WeeklyCalendar() {
+  const [weekBookings, setWeekBookings] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [currentWeekStart, setCurrentWeekStart] = useState(
+    getWeekStart(new Date()),
+  );
+
+  useEffect(() => {
+    fetchWeekBookings();
+  }, [currentWeekStart]);
+
+  function getWeekStart(date: Date) {
+    const d = new Date(date);
+    const day = d.getDay();
+    const diff = d.getDate() - day + (day === 0 ? -6 : 1); // Adjust when day is Sunday
+    return new Date(d.setDate(diff));
+  }
+
+  const fetchWeekBookings = async () => {
+    try {
+      setLoading(true);
+      const weekEnd = new Date(currentWeekStart);
+      weekEnd.setDate(weekEnd.getDate() + 6);
+
+      const { data, error } = await supabase
+        .from("bookings")
+        .select("*")
+        .gte("date", currentWeekStart.toISOString().split("T")[0])
+        .lte("date", weekEnd.toISOString().split("T")[0])
+        .in("status", ["pending", "confirmed"])
+        .order("date", { ascending: true })
+        .order("time", { ascending: true });
+
+      if (!error && data) {
+        setWeekBookings(data);
+      }
+    } catch (err) {
+      console.error("Error fetching week bookings:", err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const goToPreviousWeek = () => {
+    const newStart = new Date(currentWeekStart);
+    newStart.setDate(newStart.getDate() - 7);
+    setCurrentWeekStart(newStart);
+  };
+
+  const goToNextWeek = () => {
+    const newStart = new Date(currentWeekStart);
+    newStart.setDate(newStart.getDate() + 7);
+    setCurrentWeekStart(newStart);
+  };
+
+  const goToToday = () => {
+    setCurrentWeekStart(getWeekStart(new Date()));
+  };
+
+  const weekDays = Array.from({ length: 7 }, (_, i) => {
+    const date = new Date(currentWeekStart);
+    date.setDate(date.getDate() + i);
+    return date;
+  });
+
+  const getBookingsForDay = (date: Date) => {
+    const dateStr = date.toISOString().split("T")[0];
+    return weekBookings.filter((b) => b.date === dateStr);
+  };
+
+  if (loading) {
+    return (
+      <div className="text-center py-8">
+        <RefreshCw className="w-8 h-8 animate-spin mx-auto text-gray-400 mb-2" />
+        <p className="text-gray-500">Loading calendar...</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      {/* Calendar Header */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h3 className="text-lg font-semibold text-gray-900">
+            {format(currentWeekStart, "MMMM d")} -{" "}
+            {format(weekDays[6], "MMMM d, yyyy")}
+          </h3>
+        </div>
+        <div className="flex gap-2">
+          <Button variant="outline" size="sm" onClick={goToPreviousWeek}>
+            Previous
+          </Button>
+          <Button variant="outline" size="sm" onClick={goToToday}>
+            Today
+          </Button>
+          <Button variant="outline" size="sm" onClick={goToNextWeek}>
+            Next
+          </Button>
+        </div>
+      </div>
+
+      {/* Calendar Grid */}
+      <div className="grid grid-cols-7 gap-2">
+        {weekDays.map((date, index) => {
+          const dayBookings = getBookingsForDay(date);
+          const isToday = date.toDateString() === new Date().toDateString();
+          const isSunday = date.getDay() === 0;
+
+          return (
+            <div
+              key={index}
+              className={`border rounded-lg p-3 min-h-[200px] ${
+                isToday
+                  ? "border-[#9A7B1D] border-2 bg-[#F5F1E8]"
+                  : "border-gray-200 bg-white"
+              } ${isSunday ? "opacity-50 bg-gray-50" : ""}`}
+            >
+              <div className="mb-2">
+                <div
+                  className={`text-sm font-medium ${isToday ? "text-[#9A7B1D]" : "text-gray-600"}`}
+                >
+                  {format(date, "EEE")}
+                </div>
+                <div
+                  className={`text-xl font-bold ${isToday ? "text-[#9A7B1D]" : "text-gray-900"}`}
+                >
+                  {format(date, "d")}
+                </div>
+              </div>
+
+              {isSunday ? (
+                <div className="text-xs text-gray-400 text-center mt-4">
+                  Closed
+                </div>
+              ) : (
+                <div className="space-y-1">
+                  {dayBookings.length === 0 ? (
+                    <div className="text-xs text-gray-400 text-center mt-4">
+                      No appointments
+                    </div>
+                  ) : (
+                    dayBookings.map((booking) => (
+                      <div
+                        key={booking.id}
+                        className={`text-xs p-2 rounded ${
+                          booking.status === "confirmed"
+                            ? "bg-green-100 text-green-800 border border-green-200"
+                            : "bg-yellow-100 text-yellow-800 border border-yellow-200"
+                        }`}
+                      >
+                        <div className="font-medium">{booking.time}</div>
+                        <div className="truncate">
+                          {booking.first_name} {booking.last_name}
+                        </div>
+                        <div className="truncate text-gray-600">
+                          {booking.service_type}
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Legend */}
+      <div className="flex gap-4 text-xs text-gray-600 pt-2 border-t">
+        <div className="flex items-center gap-2">
+          <div className="w-3 h-3 bg-green-100 border border-green-200 rounded"></div>
+          <span>Confirmed</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <div className="w-3 h-3 bg-yellow-100 border border-yellow-200 rounded"></div>
+          <span>Pending</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <div className="w-3 h-3 border-2 border-[#9A7B1D] rounded"></div>
+          <span>Today</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function BookingsContent() {
+  const [activeTab, setActiveTab] = useState("all");
+  const [bookings, setBookings] = useState<any[]>([]);
+  const [confirmedBookings, setConfirmedBookings] = useState<any[]>([]);
+  const [cancelledBookings, setCancelledBookings] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [showRescheduleDialog, setShowRescheduleDialog] = useState(false);
+  const [showCancelDialog, setShowCancelDialog] = useState(false);
+  const [selectedBooking, setSelectedBooking] = useState<any>(null);
+  const [newDate, setNewDate] = useState("");
+  const [newTime, setNewTime] = useState("");
+  const [cancelReason, setCancelReason] = useState("");
+
+  useEffect(() => {
+    fetchBookings();
+  }, []);
+
+  const fetchBookings = async () => {
+    try {
+      setLoading(true);
+      setError(null);
+
+      // Fetch all non-cancelled bookings
+      const { data: allData, error: allError } = await supabase
+        .from("bookings")
+        .select("*")
+        .neq("status", "cancelled")
+        .order("created_at", { ascending: false });
+
+      // Fetch confirmed bookings
+      const { data: confirmedData, error: confirmedError } = await supabase
+        .from("bookings")
+        .select("*")
+        .eq("status", "confirmed")
+        .order("created_at", { ascending: false });
+
+      // Fetch cancelled bookings
+      const { data: cancelledData, error: cancelledError } = await supabase
+        .from("bookings")
+        .select("*")
+        .eq("status", "cancelled")
+        .order("cancelled_at", { ascending: false });
+
+      if (allError || confirmedError || cancelledError) {
+        console.error(
+          "Error fetching bookings:",
+          allError || confirmedError || cancelledError,
+        );
+        setError(
+          "Database not set up yet. Please run the SQL migration script.",
+        );
+        setBookings([]);
+        setConfirmedBookings([]);
+        setCancelledBookings([]);
+      } else {
+        setBookings(allData || []);
+        setConfirmedBookings(confirmedData || []);
+        setCancelledBookings(cancelledData || []);
+      }
+    } catch (err) {
+      console.error("Error:", err);
+      setError("Database not set up yet. Please run the SQL migration script.");
+      setBookings([]);
+      setConfirmedBookings([]);
+      setCancelledBookings([]);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const sendWhatsAppNotification = async (
+    booking: any,
+    action: string,
+    newDateTime?: { date: string; time: string },
+  ) => {
+    try {
+      // Send TO the customer's phone number
+      const customerPhone = booking.phone
+        .replace(/\s+/g, "")
+        .replace(/^0/, "27");
+
+      let message = "";
+      const dateStr = booking.date
+        ? format(new Date(booking.date), "PPP")
+        : "No date";
+
+      if (action === "confirmed") {
+        message = `✅ BOOKING CONFIRMED - DentX Quarters\n\nHello ${booking.first_name},\n\nYour appointment has been confirmed!\n\nDate: ${dateStr}\nTime: ${booking.time}\nService: ${booking.service_type?.replace("-", " ")}\nPractitioner: ${booking.practitioner_type?.replace("-", " ")}\n\nLocation: DentX Quarters, Kempton Park\n\nIf you need to reschedule, please contact us at +27 68 534 0763\n\nSee you soon!`;
+      } else if (action === "cancelled") {
+        message = `❌ BOOKING CANCELLED - DentX Quarters\n\nHello ${booking.first_name},\n\nYour appointment has been cancelled.\n\nDate: ${dateStr}\nTime: ${booking.time}\nService: ${booking.service_type?.replace("-", " ")}\n\nTo book a new appointment, visit: dentxquarters.co.za\nOr call us: +27 68 534 0763`;
+      } else if (action === "rescheduled" && newDateTime) {
+        const newDateStr = format(new Date(newDateTime.date), "PPP");
+        message = `🔄 BOOKING RESCHEDULED - DentX Quarters\n\nHello ${booking.first_name},\n\nYour appointment has been rescheduled:\n\nOLD APPOINTMENT:\nDate: ${dateStr}\nTime: ${booking.time}\n\nNEW APPOINTMENT:\nDate: ${newDateStr}\nTime: ${newDateTime.time}\n\nService: ${booking.service_type?.replace("-", " ")}\nPractitioner: ${booking.practitioner_type?.replace("-", " ")}\n\nPlease confirm receipt.\n\nDentX Quarters\n+27 68 534 0763`;
+      }
+
+      const whatsappUrl = `https://wa.me/${customerPhone}?text=${encodeURIComponent(message)}`;
+      window.open(whatsappUrl, "_blank");
+
+      toast.success("WhatsApp notification opened - send to customer");
+    } catch (err) {
+      console.error("Error sending WhatsApp notification:", err);
+    }
+  };
+
+  const handleConfirm = async (booking: any) => {
+    try {
+      console.log("Starting handleConfirm for:", booking.phone);
+
+      // Check if patient already exists
+      const { data: existingPatient } = await supabase
+        .from("patients")
+        .select("id")
+        .eq("phone", booking.phone)
+        .single();
+
+      console.log("Existing patient:", existingPatient);
+
+      // If patient doesn't exist, create new patient with "pending KYC" status
+      if (!existingPatient) {
+        console.log("Creating new patient...");
+        const { data: newPatient, error: patientError } = await supabase
+          .from("patients")
+          .insert({
+            first_name: booking.first_name,
+            last_name: booking.last_name,
+            phone: booking.phone,
+            email: booking.email || null,
+            medical_aid: booking.medical_aid || null,
+            medical_aid_number: booking.medical_aid_number || null,
+            kyc_status: "pending",
+            source: "website_booking",
+          })
+          .select();
+
+        if (patientError) {
+          console.error("Error creating patient:", patientError);
+          toast.error("Failed to create patient record");
+          // Don't continue if patient creation fails
+          return;
+        } else {
+          console.log("Patient created successfully:", newPatient);
+          toast.success("New patient added with pending KYC status");
+        }
+      } else {
+        console.log("Patient already exists, skipping creation");
+      }
+
+      // Update booking status to confirmed
+      const { error: updateError } = await supabase
+        .from("bookings")
+        .update({ status: "confirmed" })
+        .eq("id", booking.id);
+
+      if (updateError) {
+        toast.error("Failed to confirm booking");
+        console.error(updateError);
+        return;
+      }
+
+      console.log("Booking confirmed successfully");
+      toast.success("Booking confirmed successfully!");
+
+      // Send WhatsApp notification to CUSTOMER
+      await sendWhatsAppNotification(booking, "confirmed");
+
+      // Refresh bookings
+      fetchBookings();
+    } catch (err) {
+      toast.error("An error occurred");
+      console.error("Error in handleConfirm:", err);
+    }
+  };
+
+  const handleCancelClick = (booking: any) => {
+    setSelectedBooking(booking);
+    setCancelReason("");
+    setShowCancelDialog(true);
+  };
+
+  const handleCancelSubmit = async () => {
+    if (!cancelReason.trim()) {
+      toast.error("Please provide a cancellation reason");
+      return;
+    }
+
+    try {
+      const { error: updateError } = await supabase
+        .from("bookings")
+        .update({
+          status: "cancelled",
+          cancellation_reason: cancelReason,
+          cancelled_at: new Date().toISOString(),
+        })
+        .eq("id", selectedBooking.id);
+
+      if (updateError) {
+        toast.error("Failed to cancel booking");
+        console.error(updateError);
+        return;
+      }
+
+      toast.success("Booking cancelled and moved to history");
+
+      // Send WhatsApp notification to CUSTOMER
+      await sendWhatsAppNotification(selectedBooking, "cancelled");
+
+      // Close dialog and refresh
+      setShowCancelDialog(false);
+      setSelectedBooking(null);
+      setCancelReason("");
+      fetchBookings();
+    } catch (err) {
+      toast.error("An error occurred");
+      console.error(err);
+    }
+  };
+
+  const handleRescheduleClick = (booking: any) => {
+    setSelectedBooking(booking);
+    setNewDate(booking.date || "");
+    setNewTime(booking.time || "");
+    setShowRescheduleDialog(true);
+  };
+
+  const handleRescheduleSubmit = async () => {
+    if (!selectedBooking || !newDate || !newTime) {
+      toast.error("Please select both date and time");
+      return;
+    }
+
+    try {
+      const { error: updateError } = await supabase
+        .from("bookings")
+        .update({
+          date: newDate,
+          time: newTime,
+          status: "pending", // Set to pending so admin must confirm again
+        })
+        .eq("id", selectedBooking.id);
+
+      if (updateError) {
+        toast.error("Failed to reschedule booking");
+        console.error(updateError);
+        return;
+      }
+
+      toast.success("Booking rescheduled! Please confirm the new appointment.");
+
+      // Send WhatsApp notification to CUSTOMER
+      await sendWhatsAppNotification(selectedBooking, "rescheduled", {
+        date: newDate,
+        time: newTime,
+      });
+
+      // Close dialog and refresh
+      setShowRescheduleDialog(false);
+      setSelectedBooking(null);
+      fetchBookings();
+    } catch (err) {
+      toast.error("An error occurred");
+      console.error(err);
+    }
+  };
+
+  const getStatusBadge = (status: string) => {
+    const variants: Record<string, string> = {
+      pending: "bg-yellow-100 text-yellow-800",
+      confirmed: "bg-green-100 text-green-800",
+      completed: "bg-blue-100 text-blue-800",
+      cancelled: "bg-red-100 text-red-800",
+    };
+    return variants[status] || "bg-gray-100 text-gray-800";
+  };
+
+  return (
+    <>
+      <Card>
+        <CardHeader className="flex flex-row items-center justify-between">
+          <CardTitle>All Bookings</CardTitle>
+          <Button
+            onClick={fetchBookings}
+            variant="outline"
+            size="sm"
+            className="flex items-center gap-2"
+          >
+            <RefreshCw className="w-4 h-4" />
+            Refresh
+          </Button>
+        </CardHeader>
+        <CardContent>
+          {loading ? (
+            <div className="text-center py-8">
+              <RefreshCw className="w-8 h-8 animate-spin mx-auto text-gray-400 mb-2" />
+              <p className="text-gray-500">Loading bookings...</p>
+            </div>
+          ) : error ? (
+            <div className="text-center py-8">
+              <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-6 max-w-2xl mx-auto">
+                <h3 className="text-lg font-semibold text-yellow-800 mb-2">
+                  Database Not Set Up
+                </h3>
+                <p className="text-yellow-700 mb-4">{error}</p>
+                <div className="bg-white rounded p-4 text-left">
+                  <p className="text-sm text-gray-700 mb-2 font-semibold">
+                    Quick Setup (3 minutes):
+                  </p>
+                  <ol className="text-sm text-gray-600 space-y-1 list-decimal list-inside">
+                    <li>
+                      Open file:{" "}
+                      <code className="bg-gray-100 px-2 py-1 rounded">
+                        ⚡-DO-THIS-NOW.md
+                      </code>
+                    </li>
+                    <li>
+                      Copy the SQL script from:{" "}
+                      <code className="bg-gray-100 px-2 py-1 rounded">
+                        COPY-THIS-SQL.txt
+                      </code>
+                    </li>
+                    <li>Run in Supabase SQL Editor</li>
+                    <li>Refresh this page</li>
+                  </ol>
+                </div>
+              </div>
+            </div>
+          ) : bookings.length === 0 ? (
+            <div className="text-center py-8">
+              <CalendarIcon className="w-16 h-16 mx-auto text-gray-300 mb-4" />
+              <h3 className="text-lg font-semibold text-gray-700 mb-2">
+                No Bookings Yet
+              </h3>
+              <p className="text-gray-500">
+                Bookings will appear here once patients submit appointments.
+              </p>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              {bookings.map((booking) => (
+                <div
+                  key={booking.id}
+                  className="border border-gray-200 rounded-lg p-4 hover:shadow-md transition-shadow"
+                >
+                  <div className="flex items-start justify-between mb-3">
+                    <div className="flex items-start gap-3">
+                      <div className="w-10 h-10 rounded-full bg-[#F5F1E8] flex items-center justify-center">
+                        <User className="w-5 h-5 text-[#9A7B1D]" />
+                      </div>
+                      <div>
+                        <h4 className="font-semibold text-gray-900">
+                          {booking.first_name} {booking.last_name}
+                        </h4>
+                        <p className="text-sm text-gray-500 capitalize">
+                          {booking.service_type?.replace("-", " ")} -{" "}
+                          {booking.practitioner_type?.replace("-", " ")}
+                        </p>
+                      </div>
+                    </div>
+                    <Badge className={getStatusBadge(booking.status)}>
+                      {booking.status}
+                    </Badge>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-4 mt-4">
+                    <div className="flex items-center gap-2 text-sm">
+                      <CalendarIcon className="w-4 h-4 text-gray-400" />
+                      <span className="text-gray-700">
+                        {booking.date
+                          ? format(new Date(booking.date), "PPP")
+                          : "No date"}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2 text-sm">
+                      <Clock className="w-4 h-4 text-gray-400" />
+                      <span className="text-gray-700">{booking.time}</span>
+                    </div>
+                    <div className="flex items-center gap-2 text-sm">
+                      <Phone className="w-4 h-4 text-gray-400" />
+                      <span className="text-gray-700">{booking.phone}</span>
+                    </div>
+                    <div className="flex items-center gap-2 text-sm">
+                      <Mail className="w-4 h-4 text-gray-400" />
+                      <span className="text-gray-700">
+                        {booking.email || "No email"}
+                      </span>
+                    </div>
+                  </div>
+
+                  {booking.reason && (
+                    <div className="mt-3 pt-3 border-t border-gray-100">
+                      <p className="text-sm text-gray-600">
+                        <span className="font-medium">Reason:</span>{" "}
+                        {booking.reason}
+                      </p>
+                    </div>
+                  )}
+
+                  {booking.medical_aid && (
+                    <div className="mt-2">
+                      <p className="text-sm text-gray-600">
+                        <span className="font-medium">Medical Aid:</span>{" "}
+                        {booking.medical_aid}
+                        {booking.medical_aid_number &&
+                          ` (${booking.medical_aid_number})`}
+                      </p>
+                    </div>
+                  )}
+
+                  <div className="mt-4 flex gap-2">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="text-green-600 border-green-600 hover:bg-green-50"
+                      onClick={() => handleConfirm(booking)}
+                    >
+                      Confirm
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="text-blue-600 border-blue-600 hover:bg-blue-50"
+                      onClick={() => handleRescheduleClick(booking)}
+                    >
+                      Reschedule
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="text-red-600 border-red-600 hover:bg-red-50"
+                      onClick={() => handleCancelClick(booking)}
+                    >
+                      Cancel
+                    </Button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Reschedule Dialog */}
+      <Dialog
+        open={showRescheduleDialog}
+        onOpenChange={setShowRescheduleDialog}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Reschedule Booking</DialogTitle>
+            <DialogDescription>
+              Update the appointment date and time for{" "}
+              {selectedBooking?.first_name} {selectedBooking?.last_name}
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4">
+            <div>
+              <label
+                htmlFor="new-date"
+                className="block text-sm font-medium text-gray-700 mb-1"
+              >
+                New Date
+              </label>
+              <input
+                id="new-date"
+                type="date"
+                value={newDate}
+                onChange={(e) => setNewDate(e.target.value)}
+                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#9A7B1D]"
+              />
+            </div>
+
+            <div>
+              <label
+                htmlFor="new-time"
+                className="block text-sm font-medium text-gray-700 mb-1"
+              >
+                New Time
+              </label>
+              <select
+                id="new-time"
+                value={newTime}
+                onChange={(e) => setNewTime(e.target.value)}
+                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#9A7B1D]"
+              >
+                <option value="">Select time</option>
+                <option value="08:30">08:30</option>
+                <option value="09:00">09:00</option>
+                <option value="09:30">09:30</option>
+                <option value="10:00">10:00</option>
+                <option value="10:30">10:30</option>
+                <option value="11:00">11:00</option>
+                <option value="11:30">11:30</option>
+                <option value="12:00">12:00</option>
+                <option value="12:30">12:30</option>
+                <option value="13:00">13:00</option>
+                <option value="13:30">13:30</option>
+                <option value="14:00">14:00</option>
+                <option value="14:30">14:30</option>
+                <option value="15:00">15:00</option>
+                <option value="15:30">15:30</option>
+              </select>
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setShowRescheduleDialog(false)}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={handleRescheduleSubmit}
+              className="bg-[#9A7B1D] hover:bg-[#7d6418] text-white"
+            >
+              Reschedule
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Cancel Dialog */}
+      <Dialog open={showCancelDialog} onOpenChange={setShowCancelDialog}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Cancel Booking</DialogTitle>
+            <DialogDescription>
+              Provide a reason for cancelling the appointment with{" "}
+              {selectedBooking?.first_name} {selectedBooking?.last_name}
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4">
+            <div>
+              <label
+                htmlFor="cancel-reason"
+                className="block text-sm font-medium text-gray-700 mb-1"
+              >
+                Cancellation Reason
+              </label>
+              <textarea
+                id="cancel-reason"
+                value={cancelReason}
+                onChange={(e) => setCancelReason(e.target.value)}
+                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#9A7B1D]"
+                rows={4}
+              />
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setShowCancelDialog(false)}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={handleCancelSubmit}
+              className="bg-[#9A7B1D] hover:bg-[#7d6418] text-white"
+            >
+              Confirm Cancellation
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
+  );
+}
+
+function PatientsContent() {
+  const [patients, setPatients] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    fetchPatients();
+  }, []);
+
+  const fetchPatients = async () => {
+    try {
+      setLoading(true);
+      const { data, error } = await supabase
+        .from("patients")
+        .select("*")
+        .order("created_at", { ascending: false });
+
+      if (!error && data) {
+        setPatients(data);
+      }
+    } catch (err) {
+      console.error("Error fetching patients:", err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const getKYCBadge = (status: string) => {
+    const variants: Record<string, string> = {
+      pending: "bg-yellow-100 text-yellow-800",
+      verified: "bg-green-100 text-green-800",
+      incomplete: "bg-red-100 text-red-800",
+    };
+    return variants[status] || "bg-gray-100 text-gray-800";
+  };
+
+  return (
+    <Card>
+      <CardHeader className="flex flex-row items-center justify-between">
+        <CardTitle>Patient List</CardTitle>
+        <Button
+          onClick={fetchPatients}
+          variant="outline"
+          size="sm"
+          className="flex items-center gap-2"
+        >
+          <RefreshCw className="w-4 h-4" />
+          Refresh
+        </Button>
+      </CardHeader>
+      <CardContent>
+        {loading ? (
+          <div className="text-center py-8">
+            <RefreshCw className="w-8 h-8 animate-spin mx-auto text-gray-400 mb-2" />
+            <p className="text-gray-500">Loading patients...</p>
+          </div>
+        ) : patients.length === 0 ? (
+          <div className="text-center py-8">
+            <Users className="w-16 h-16 mx-auto text-gray-300 mb-4" />
+            <h3 className="text-lg font-semibold text-gray-700 mb-2">
+              No Patients Yet
+            </h3>
+            <p className="text-gray-500">
+              Patients will appear here when bookings are confirmed.
+            </p>
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full">
+              <thead className="bg-gray-50 border-b">
+                <tr>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">
+                    Name
+                  </th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">
+                    Phone
+                  </th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">
+                    Email
+                  </th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">
+                    Medical Aid
+                  </th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">
+                    KYC Status
+                  </th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">
+                    Source
+                  </th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">
+                    Added
+                  </th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-200">
+                {patients.map((patient) => (
+                  <tr key={patient.id} className="hover:bg-gray-50">
+                    <td className="px-4 py-4 whitespace-nowrap">
+                      <div className="flex items-center">
+                        <div className="w-8 h-8 rounded-full bg-[#F5F1E8] flex items-center justify-center mr-3">
+                          <User className="w-4 h-4 text-[#9A7B1D]" />
+                        </div>
+                        <div className="font-medium text-gray-900">
+                          {patient.first_name} {patient.last_name}
+                        </div>
+                      </div>
+                    </td>
+                    <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-700">
+                      {patient.phone}
+                    </td>
+                    <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-700">
+                      {patient.email || "N/A"}
+                    </td>
+                    <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-700">
+                      {patient.medical_aid || "None"}
+                    </td>
+                    <td className="px-4 py-4 whitespace-nowrap">
+                      <Badge
+                        className={getKYCBadge(patient.kyc_status || "pending")}
+                      >
+                        {patient.kyc_status || "pending"}
+                      </Badge>
+                    </td>
+                    <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-700 capitalize">
+                      {patient.source?.replace("_", " ") || "N/A"}
+                    </td>
+                    <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-500">
+                      {patient.created_at
+                        ? format(new Date(patient.created_at), "PPP")
+                        : "N/A"}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function PracticeManagementContent() {
+  return (
+    <div className="space-y-6">
+      <Card>
+        <CardHeader>
+          <CardTitle>Practice Information</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="space-y-4">
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <p className="text-sm font-medium text-gray-500">
+                  Practice Name
+                </p>
+                <p className="text-base font-semibold">DentX Quarters</p>
+              </div>
+              <div>
+                <p className="text-sm font-medium text-gray-500">
+                  Contact Number
+                </p>
+                <p className="text-base font-semibold">+27 68 534 0763</p>
+              </div>
+              <div>
+                <p className="text-sm font-medium text-gray-500">Email</p>
+                <p className="text-base font-semibold">
+                  info@dentxquarters.co.za
+                </p>
+              </div>
+              <div>
+                <p className="text-sm font-medium text-gray-500">Location</p>
+                <p className="text-base font-semibold">
+                  Kempton Park, South Africa
+                </p>
+              </div>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <Card>
+          <CardHeader>
+            <CardTitle>Staff Management</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-gray-500">
+              Manage practitioners and staff members
+            </p>
+            <Button className="mt-4 bg-[#9A7B1D] hover:bg-[#7d6418]">
+              Add Staff Member
+            </Button>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Services</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="text-sm">Dental Care</span>
+                <Badge>Active</Badge>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-sm">General Medicine</span>
+                <Badge>Active</Badge>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-sm">IV Drip Therapy</span>
+                <Badge>Active</Badge>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-sm">Physiotherapy</span>
+                <Badge>Active</Badge>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Working Hours</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-2 text-sm">
+              <div className="flex justify-between">
+                <span>Monday - Friday</span>
+                <span className="font-semibold">08:30 - 16:00</span>
+              </div>
+              <div className="flex justify-between">
+                <span>Saturday</span>
+                <span className="font-semibold">08:30 - 13:00</span>
+              </div>
+              <div className="flex justify-between">
+                <span>Sunday</span>
+                <span className="font-semibold text-red-600">Closed</span>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Quick Actions</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-2">
+              <Button variant="outline" className="w-full justify-start">
+                Update Practice Details
+              </Button>
+              <Button variant="outline" className="w-full justify-start">
+                Manage Services
+              </Button>
+              <Button variant="outline" className="w-full justify-start">
+                Configure Notifications
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+    </div>
+  );
+}
+
+function ActivityContent() {
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Activity Log</CardTitle>
+      </CardHeader>
+      <CardContent>
+        <p className="text-center py-8 text-gray-500">No activity found</p>
+      </CardContent>
+    </Card>
+  );
+}
+
+function SettingsContent() {
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Settings</CardTitle>
+      </CardHeader>
+      <CardContent>
+        <p className="text-gray-500">System settings and configurations</p>
+      </CardContent>
+    </Card>
+  );
+}

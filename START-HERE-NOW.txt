@@ -1,0 +1,57 @@
+═══════════════════════════════════════════════════════════════
+🚨 BOOKINGS NOT SHOWING - LET'S FIX IT NOW
+═══════════════════════════════════════════════════════════════
+
+Your website is working! But bookings aren't saving to the database.
+
+Let's find out WHY in 30 seconds...
+
+───────────────────────────────────────────────────────────────
+STEP 1: RUN THE DIAGNOSTIC TEST
+───────────────────────────────────────────────────────────────
+
+Add this to the end of your website URL:
+
+    ?test-db=true
+
+EXAMPLES:
+    http://localhost:5173/?test-db=true
+    http://localhost:3000/?test-db=true
+
+Then press ENTER.
+
+───────────────────────────────────────────────────────────────
+STEP 2: CLICK THE BUTTON
+───────────────────────────────────────────────────────────────
+
+You'll see a page with a button:
+
+    [ Run Database Tests ]
+
+Click it!
+
+───────────────────────────────────────────────────────────────
+STEP 3: TELL ME WHAT YOU SEE
+───────────────────────────────────────────────────────────────
+
+The test will show:
+
+    ✅ Passed: X
+    ❌ Failed: X
+    ⚠️ Warnings: X
+
+Tell me:
+1. How many failed?
+2. What do the error messages say?
+
+───────────────────────────────────────────────────────────────
+THAT'S IT!
+───────────────────────────────────────────────────────────────
+
+This test will show us EXACTLY what's wrong.
+
+Then we can fix it in 2 minutes!
+
+═══════════════════════════════════════════════════════════════
+ACTION: Add ?test-db=true to your URL and click "Run Tests"
+═══════════════════════════════════════════════════════════════
