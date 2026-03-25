@@ -504,8 +504,45 @@ Booking via Admin Dashboard`;
     window.open(whatsappLink, "_blank");
   };
 
+  const normalizeWhatsAppNumber = (phoneNumber: string) => {
+    const digits = phoneNumber.replace(/\D/g, "");
+
+    if (!digits) {
+      return "";
+    }
+
+    if (digits.startsWith("27")) {
+      return digits;
+    }
+
+    if (digits.startsWith("0")) {
+      return `27${digits.slice(1)}`;
+    }
+
+    return digits;
+  };
+
+  const sendBookingConfirmationWhatsApp = (booking: Booking) => {
+    if (!booking.phone) {
+      toast.error("No phone number available for this booking");
+      return;
+    }
+
+    const whatsappNumber = normalizeWhatsAppNumber(booking.phone);
+    if (!whatsappNumber) {
+      toast.error("Invalid phone number for WhatsApp");
+      return;
+    }
+
+    const message = `Hi ${booking.firstName}, your booking with DentX Quarters has been confirmed.%0A%0AService: ${getServiceTitle(booking)}%0APractitioner: ${getPractitionerTitle(booking)}%0ADate: ${safeFormatDate(booking.date, "PPP")}%0ATime: ${booking.time}%0A%0AIf you need to reschedule, please contact us.`;
+    const whatsappLink = `https://wa.me/${whatsappNumber}?text=${message}`;
+    window.open(whatsappLink, "_blank");
+  };
+
   const handleUpdateStatus = async (bookingId: string, status: string) => {
     try {
+      const booking = bookings.find((entry) => entry.id === bookingId);
+
       const response = await apiFetch(`/bookings/${bookingId}`, {
         method: "PUT",
         headers: {
@@ -522,6 +559,9 @@ Booking via Admin Dashboard`;
 
       if (data.success) {
         toast.success(`Booking ${status}`);
+        if (status === "confirmed" && booking) {
+          sendBookingConfirmationWhatsApp(booking);
+        }
         fetchData();
       } else {
         toast.error("Failed to update booking");
