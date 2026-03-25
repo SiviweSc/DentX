@@ -256,6 +256,21 @@ const getPractitionerTitle = (booking: Booking) => {
   return matchedPractitioner?.title || practitionerValue;
 };
 
+const mapPatientFromApi = (patient: any): Patient => ({
+  id: patient.id,
+  firstName: patient.firstName ?? patient.first_name ?? "",
+  lastName: patient.lastName ?? patient.last_name ?? "",
+  email: patient.email ?? "",
+  phone: patient.phone ?? "",
+  idNumber: patient.idNumber ?? patient.id_number ?? "",
+  medicalAid: patient.medicalAid ?? patient.medical_aid ?? "",
+  medicalAidNumber:
+    patient.medicalAidNumber ?? patient.medical_aid_number ?? "",
+  createdAt: patient.createdAt ?? patient.created_at ?? "",
+  lastVisit: patient.lastVisit ?? patient.last_visit ?? "",
+  bookings: Array.isArray(patient.bookings) ? patient.bookings : [],
+});
+
 export function AdminDashboard({ onClose, authToken }: AdminDashboardProps) {
   const [bookings, setBookings] = useState<Booking[]>([]);
   const [patients, setPatients] = useState<Patient[]>([]);
@@ -354,7 +369,7 @@ export function AdminDashboard({ onClose, authToken }: AdminDashboardProps) {
         "Patients endpoint",
       );
       if (patientsData.success) {
-        setPatients(patientsData.patients);
+        setPatients((patientsData.patients || []).map(mapPatientFromApi));
       }
 
       // Fetch booking contacts
