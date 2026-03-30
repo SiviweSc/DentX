@@ -33,11 +33,11 @@ export function Hero({ onBookNow }: HeroProps) {
               <span className="relative z-10">YOU</span>
               <span className="absolute bottom-2 left-0 right-0 h-3 bg-[#9A7B1D] -z-0"></span>
             </span>{" "}
-            with integrated health care
+            With Integrated Health Care
           </h1>
           <p className="text-xl text-gray-200 mb-8 max-w-2xl mx-auto">
-            Offering professional modern treatment and a friendly team committed
-            to your well being.
+            Offering Professional Modern Treatment And A Friendly Team Committed
+            To Your Well Being.
           </p>
         </div>
       </div>
