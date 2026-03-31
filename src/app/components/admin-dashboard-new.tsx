@@ -29,6 +29,8 @@ import {
   Calendar,
   History,
   Eye,
+  Menu,
+  ChevronLeft,
 } from "lucide-react";
 import { supabase } from "../../../utils/supabase/client";
 import { format } from "date-fns";
@@ -46,6 +48,7 @@ export function AdminDashboard({
   authToken: _authToken,
 }: AdminDashboardProps) {
   const [activeSection, setActiveSection] = useState("dashboard");
+  const [sidebarOpen, setSidebarOpen] = useState(false);
 
   const menuItems = [
     { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
@@ -57,13 +60,36 @@ export function AdminDashboard({
     { id: "settings", label: "Settings", icon: ClipboardList },
   ];
 
+  const handleNavClick = (id: string) => {
+    setActiveSection(id);
+    setSidebarOpen(false); // Close sidebar on mobile after selection
+  };
+
   return (
     <div className="flex h-screen bg-gray-50">
+      {/* Mobile Overlay */}
+      {sidebarOpen && (
+        <div
+          className="fixed inset-0 bg-black bg-opacity-50 z-30 md:hidden"
+          onClick={() => setSidebarOpen(false)}
+        />
+      )}
+
       {/* Left Sidebar */}
-      <aside className="w-64 bg-white border-r border-gray-200 flex flex-col">
+      <aside
+        className={`fixed md:relative w-64 h-screen bg-white border-r border-gray-200 flex flex-col transform transition-transform duration-300 ease-in-out z-40 ${
+          sidebarOpen ? "translate-x-0" : "-translate-x-full"
+        } md:translate-x-0`}
+      >
         {/* Logo */}
-        <div className="p-6 border-b border-gray-200">
+        <div className="p-6 border-b border-gray-200 flex items-center justify-between">
           <img src={logo} alt="DentX Quarters" className="h-12" />
+          <button
+            onClick={() => setSidebarOpen(false)}
+            className="md:hidden p-1 hover:bg-gray-100 rounded-lg"
+          >
+            <ChevronLeft className="w-6 h-6" />
+          </button>
         </div>
 
         {/* Navigation */}
@@ -74,14 +100,14 @@ export function AdminDashboard({
               return (
                 <button
                   key={item.id}
-                  onClick={() => setActiveSection(item.id)}
+                  onClick={() => handleNavClick(item.id)}
                   className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${
                     activeSection === item.id
                       ? "bg-[#9A7B1D] text-white"
                       : "text-gray-700 hover:bg-gray-100"
                   }`}
                 >
-                  <Icon className="w-5 h-5" />
+                  <Icon className="w-5 h-5 flex-shrink-0" />
                   <span className="font-medium">{item.label}</span>
                 </button>
               );
@@ -105,22 +131,28 @@ export function AdminDashboard({
       {/* Main Content */}
       <div className="flex-1 flex flex-col overflow-hidden">
         {/* Top Bar */}
-        <header className="bg-white border-b border-gray-200 px-8 py-4 flex items-center justify-between">
-          <div>
-            <h1 className="text-2xl font-bold text-gray-900">
+        <header className="bg-white border-b border-gray-200 px-4 md:px-8 py-4 flex items-center justify-between">
+          <div className="flex items-center gap-4">
+            <button
+              onClick={() => setSidebarOpen(!sidebarOpen)}
+              className="md:hidden p-2 hover:bg-gray-100 rounded-lg"
+            >
+              <Menu className="w-6 h-6" />
+            </button>
+            <h1 className="text-lg md:text-2xl font-bold text-gray-900">
               {menuItems.find((item) => item.id === activeSection)?.label ||
                 "Dashboard"}
             </h1>
           </div>
           <div className="flex items-center gap-4">
-            <div className="text-sm text-gray-600">
+            <div className="text-xs md:text-sm text-gray-600">
               Welcome, <span className="font-semibold">Admin</span>
             </div>
           </div>
         </header>
 
         {/* Content Area */}
-        <main className="flex-1 overflow-y-auto p-8">
+        <main className="flex-1 overflow-y-auto p-4 md:p-8">
           {activeSection === "dashboard" && <DashboardContent />}
           {activeSection === "calendar" && <BookingCalendar />}
           {activeSection === "bookings" && <BookingsContent />}
@@ -314,11 +346,22 @@ function WeeklyCalendar() {
     fetchWeekBookings();
   }, [currentWeekStart]);
 
+  // Format date as YYYY-MM-DD using LOCAL time to avoid UTC timezone mismatches.
+  // toISOString() converts to UTC which shifts dates in UTC+2 (SA) timezone.
+  const toLocalDateStr = (date: Date): string => {
+    const y = date.getFullYear();
+    const m = String(date.getMonth() + 1).padStart(2, "0");
+    const d = String(date.getDate()).padStart(2, "0");
+    return `${y}-${m}-${d}`;
+  };
+
   function getWeekStart(date: Date) {
     const d = new Date(date);
     const day = d.getDay();
-    const diff = d.getDate() - day + (day === 0 ? -6 : 1); // Adjust when day is Sunday
-    return new Date(d.setDate(diff));
+    const diff = d.getDate() - day + (day === 0 ? -6 : 1); // Monday start
+    d.setDate(diff);
+    d.setHours(0, 0, 0, 0);
+    return d;
   }
 
   const fetchWeekBookings = async () => {
@@ -327,17 +370,21 @@ function WeeklyCalendar() {
       const weekEnd = new Date(currentWeekStart);
       weekEnd.setDate(weekEnd.getDate() + 6);
 
+      // Use "YYYY-MM-DDT23:59:59" for the upper bound so that records stored as
+      // full ISO datetimes (e.g. "2026-04-01T09:00:00") are included.
       const { data, error } = await supabase
         .from("bookings")
         .select("*")
-        .gte("date", currentWeekStart.toISOString().split("T")[0])
-        .lte("date", weekEnd.toISOString().split("T")[0])
+        .gte("date", toLocalDateStr(currentWeekStart))
+        .lte("date", toLocalDateStr(weekEnd) + "T23:59:59")
         .in("status", ["pending", "confirmed"])
         .order("date", { ascending: true })
         .order("time", { ascending: true });
 
       if (!error && data) {
         setWeekBookings(data);
+      } else if (error) {
+        console.error("Error fetching week bookings:", error);
       }
     } catch (err) {
       console.error("Error fetching week bookings:", err);
@@ -368,9 +415,11 @@ function WeeklyCalendar() {
     return date;
   });
 
+  // The DB stores date as a full ISO string e.g. "2026-04-01T09:00:00".
+  // Use startsWith so "2026-04-01T09:00:00".startsWith("2026-04-01") matches correctly.
   const getBookingsForDay = (date: Date) => {
-    const dateStr = date.toISOString().split("T")[0];
-    return weekBookings.filter((b) => b.date === dateStr);
+    const dateStr = toLocalDateStr(date);
+    return weekBookings.filter((b) => b.date?.startsWith(dateStr));
   };
 
   if (loading) {
@@ -385,94 +434,109 @@ function WeeklyCalendar() {
   return (
     <div className="space-y-4">
       {/* Calendar Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h3 className="text-lg font-semibold text-gray-900">
-            {format(currentWeekStart, "MMMM d")} -{" "}
-            {format(weekDays[6], "MMMM d, yyyy")}
-          </h3>
-        </div>
-        <div className="flex gap-2">
-          <Button variant="outline" size="sm" onClick={goToPreviousWeek}>
-            Previous
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <h3 className="text-sm sm:text-lg font-semibold text-gray-900">
+          {format(currentWeekStart, "MMM d")} &ndash;{" "}
+          {format(weekDays[6], "MMM d, yyyy")}
+        </h3>
+        <div className="flex gap-1 sm:gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={goToPreviousWeek}
+            className="text-xs sm:text-sm"
+          >
+            ‹ Prev
           </Button>
-          <Button variant="outline" size="sm" onClick={goToToday}>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={goToToday}
+            className="text-xs sm:text-sm"
+          >
             Today
           </Button>
-          <Button variant="outline" size="sm" onClick={goToNextWeek}>
-            Next
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={goToNextWeek}
+            className="text-xs sm:text-sm"
+          >
+            Next ›
           </Button>
         </div>
       </div>
 
-      {/* Calendar Grid */}
-      <div className="grid grid-cols-7 gap-2">
-        {weekDays.map((date, index) => {
-          const dayBookings = getBookingsForDay(date);
-          const isToday = date.toDateString() === new Date().toDateString();
-          const isSunday = date.getDay() === 0;
+      {/* Calendar Grid — horizontally scrollable on mobile */}
+      <div className="overflow-x-auto -mx-2 px-2">
+        <div className="grid grid-cols-7 gap-1 sm:gap-2 min-w-[560px]">
+          {weekDays.map((date, index) => {
+            const dayBookings = getBookingsForDay(date);
+            const isToday = date.toDateString() === new Date().toDateString();
+            const isSunday = date.getDay() === 0;
 
-          return (
-            <div
-              key={index}
-              className={`border rounded-lg p-3 min-h-[200px] ${
-                isToday
-                  ? "border-[#9A7B1D] border-2 bg-[#F5F1E8]"
-                  : "border-gray-200 bg-white"
-              } ${isSunday ? "opacity-50 bg-gray-50" : ""}`}
-            >
-              <div className="mb-2">
-                <div
-                  className={`text-sm font-medium ${isToday ? "text-[#9A7B1D]" : "text-gray-600"}`}
-                >
-                  {format(date, "EEE")}
+            return (
+              <div
+                key={index}
+                className={`border rounded-lg p-2 sm:p-3 min-h-[160px] sm:min-h-[200px] ${
+                  isToday
+                    ? "border-[#9A7B1D] border-2 bg-[#F5F1E8]"
+                    : "border-gray-200 bg-white"
+                } ${isSunday ? "opacity-50 bg-gray-50" : ""}`}
+              >
+                <div className="mb-1 sm:mb-2">
+                  <div
+                    className={`text-xs font-medium ${isToday ? "text-[#9A7B1D]" : "text-gray-600"}`}
+                  >
+                    {format(date, "EEE")}
+                  </div>
+                  <div
+                    className={`text-base sm:text-xl font-bold ${isToday ? "text-[#9A7B1D]" : "text-gray-900"}`}
+                  >
+                    {format(date, "d")}
+                  </div>
                 </div>
-                <div
-                  className={`text-xl font-bold ${isToday ? "text-[#9A7B1D]" : "text-gray-900"}`}
-                >
-                  {format(date, "d")}
-                </div>
-              </div>
 
-              {isSunday ? (
-                <div className="text-xs text-gray-400 text-center mt-4">
-                  Closed
-                </div>
-              ) : (
-                <div className="space-y-1">
-                  {dayBookings.length === 0 ? (
-                    <div className="text-xs text-gray-400 text-center mt-4">
-                      No appointments
-                    </div>
-                  ) : (
-                    dayBookings.map((booking) => (
-                      <div
-                        key={booking.id}
-                        className={`text-xs p-2 rounded ${
-                          booking.status === "confirmed"
-                            ? "bg-green-100 text-green-800 border border-green-200"
-                            : "bg-yellow-100 text-yellow-800 border border-yellow-200"
-                        }`}
-                      >
-                        <div className="font-medium">{booking.time}</div>
-                        <div className="truncate">
-                          {booking.first_name} {booking.last_name}
-                        </div>
-                        <div className="truncate text-gray-600">
-                          {booking.service_type}
-                        </div>
+                {isSunday ? (
+                  <div className="text-xs text-gray-400 text-center mt-2">
+                    Closed
+                  </div>
+                ) : (
+                  <div className="space-y-1">
+                    {dayBookings.length === 0 ? (
+                      <div className="text-xs text-gray-400 text-center mt-2">
+                        —
                       </div>
-                    ))
-                  )}
-                </div>
-              )}
-            </div>
-          );
-        })}
+                    ) : (
+                      dayBookings.map((booking) => (
+                        <div
+                          key={booking.id}
+                          className={`text-xs p-1 sm:p-2 rounded ${
+                            booking.status === "confirmed"
+                              ? "bg-green-100 text-green-800 border border-green-200"
+                              : "bg-yellow-100 text-yellow-800 border border-yellow-200"
+                          }`}
+                        >
+                          <div className="font-semibold">{booking.time}</div>
+                          <div className="truncate">
+                            {booking.first_name} {booking.last_name}
+                          </div>
+                          <div className="truncate text-gray-500 hidden sm:block">
+                            {booking.service_type}
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
       </div>
 
       {/* Legend */}
-      <div className="flex gap-4 text-xs text-gray-600 pt-2 border-t">
+      <div className="flex flex-wrap gap-3 sm:gap-4 text-xs text-gray-600 pt-2 border-t">
         <div className="flex items-center gap-2">
           <div className="w-3 h-3 bg-green-100 border border-green-200 rounded"></div>
           <span>Confirmed</span>
@@ -889,46 +953,50 @@ function BookingsContent() {
                   key={booking.id}
                   className="border border-gray-200 rounded-lg p-4 hover:shadow-md transition-shadow"
                 >
-                  <div className="flex items-start justify-between mb-3">
-                    <div className="flex items-start gap-3">
-                      <div className="w-10 h-10 rounded-full bg-[#F5F1E8] flex items-center justify-center">
+                  <div className="flex flex-col sm:flex-row items-start justify-between gap-3 mb-3">
+                    <div className="flex items-start gap-3 min-w-0 flex-1">
+                      <div className="w-10 h-10 rounded-full bg-[#F5F1E8] flex items-center justify-center flex-shrink-0">
                         <User className="w-5 h-5 text-[#9A7B1D]" />
                       </div>
-                      <div>
-                        <h4 className="font-semibold text-gray-900">
+                      <div className="min-w-0">
+                        <h4 className="font-semibold text-gray-900 truncate">
                           {booking.first_name} {booking.last_name}
                         </h4>
-                        <p className="text-sm text-gray-500 capitalize">
+                        <p className="text-sm text-gray-500 capitalize truncate">
                           {booking.service_type?.replace("-", " ")} -{" "}
                           {booking.practitioner_type?.replace("-", " ")}
                         </p>
                       </div>
                     </div>
-                    <Badge className={getStatusBadge(booking.status)}>
+                    <Badge
+                      className={`${getStatusBadge(booking.status)} flex-shrink-0`}
+                    >
                       {booking.status}
                     </Badge>
                   </div>
 
-                  <div className="grid grid-cols-2 gap-4 mt-4">
-                    <div className="flex items-center gap-2 text-sm">
-                      <CalendarIcon className="w-4 h-4 text-gray-400" />
-                      <span className="text-gray-700">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
+                    <div className="flex items-center gap-2 text-sm min-w-0">
+                      <CalendarIcon className="w-4 h-4 text-gray-400 flex-shrink-0" />
+                      <span className="text-gray-700 truncate">
                         {booking.date
                           ? format(new Date(booking.date), "PPP")
                           : "No date"}
                       </span>
                     </div>
-                    <div className="flex items-center gap-2 text-sm">
-                      <Clock className="w-4 h-4 text-gray-400" />
+                    <div className="flex items-center gap-2 text-sm min-w-0">
+                      <Clock className="w-4 h-4 text-gray-400 flex-shrink-0" />
                       <span className="text-gray-700">{booking.time}</span>
                     </div>
-                    <div className="flex items-center gap-2 text-sm">
-                      <Phone className="w-4 h-4 text-gray-400" />
-                      <span className="text-gray-700">{booking.phone}</span>
+                    <div className="flex items-center gap-2 text-sm min-w-0">
+                      <Phone className="w-4 h-4 text-gray-400 flex-shrink-0" />
+                      <span className="text-gray-700 truncate">
+                        {booking.phone}
+                      </span>
                     </div>
-                    <div className="flex items-center gap-2 text-sm">
-                      <Mail className="w-4 h-4 text-gray-400" />
-                      <span className="text-gray-700">
+                    <div className="flex items-center gap-2 text-sm min-w-0">
+                      <Mail className="w-4 h-4 text-gray-400 flex-shrink-0" />
+                      <span className="text-gray-700 truncate">
                         {booking.email || "No email"}
                       </span>
                     </div>
@@ -954,12 +1022,12 @@ function BookingsContent() {
                     </div>
                   )}
 
-                  <div className="mt-4 flex gap-2">
+                  <div className="mt-4 flex flex-wrap gap-2">
                     {booking.status === "pending" && (
                       <Button
                         size="sm"
                         variant="outline"
-                        className="text-green-600 border-green-600 hover:bg-green-50"
+                        className="text-green-600 border-green-600 hover:bg-green-50 text-xs sm:text-sm"
                         onClick={() => handleConfirm(booking)}
                       >
                         Confirm
@@ -968,7 +1036,7 @@ function BookingsContent() {
                     <Button
                       size="sm"
                       variant="outline"
-                      className="text-blue-600 border-blue-600 hover:bg-blue-50"
+                      className="text-blue-600 border-blue-600 hover:bg-blue-50 text-xs sm:text-sm"
                       onClick={() => handleRescheduleClick(booking)}
                     >
                       Reschedule
@@ -976,7 +1044,7 @@ function BookingsContent() {
                     <Button
                       size="sm"
                       variant="outline"
-                      className="text-red-600 border-red-600 hover:bg-red-50"
+                      className="text-red-600 border-red-600 hover:bg-red-50 text-xs sm:text-sm"
                       onClick={() => handleCancelClick(booking)}
                     >
                       Cancel

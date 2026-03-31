@@ -288,16 +288,16 @@ export function BookingCalendar({ onClose }: BookingCalendarProps) {
 
   return (
     <div className="h-full flex flex-col">
-      <div className="mb-4 flex items-center justify-between">
+      <div className="mb-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
-          <h2 className="text-xl font-semibold text-gray-900">
+          <h2 className="text-lg sm:text-xl font-semibold text-gray-900">
             Bookings Calendar
           </h2>
-          <p className="text-sm text-gray-600 mt-1">
+          <p className="text-xs sm:text-sm text-gray-600 mt-1">
             View and manage all bookings in calendar format
           </p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           <Button
             variant={view === "month" ? "default" : "outline"}
             size="sm"
@@ -326,22 +326,30 @@ export function BookingCalendar({ onClose }: BookingCalendarProps) {
       </div>
 
       {/* Legend */}
-      <div className="mb-4 bg-gray-50 p-4 rounded-lg flex flex-wrap gap-4">
+      <div className="mb-4 bg-gray-50 p-2 sm:p-4 rounded-lg flex flex-wrap gap-2 sm:gap-4">
         <div className="flex items-center gap-2">
-          <div className="w-4 h-4 bg-green-500 rounded"></div>
-          <span className="text-sm font-medium text-gray-700">Confirmed</span>
+          <div className="w-3 h-3 sm:w-4 sm:h-4 bg-green-500 rounded"></div>
+          <span className="text-xs sm:text-sm font-medium text-gray-700">
+            Confirmed
+          </span>
         </div>
         <div className="flex items-center gap-2">
-          <div className="w-4 h-4 bg-amber-500 rounded"></div>
-          <span className="text-sm font-medium text-gray-700">Pending</span>
+          <div className="w-3 h-3 sm:w-4 sm:h-4 bg-amber-500 rounded"></div>
+          <span className="text-xs sm:text-sm font-medium text-gray-700">
+            Pending
+          </span>
         </div>
         <div className="flex items-center gap-2">
-          <div className="w-4 h-4 bg-indigo-500 rounded"></div>
-          <span className="text-sm font-medium text-gray-700">Completed</span>
+          <div className="w-3 h-3 sm:w-4 sm:h-4 bg-indigo-500 rounded"></div>
+          <span className="text-xs sm:text-sm font-medium text-gray-700">
+            Completed
+          </span>
         </div>
         <div className="flex items-center gap-2">
-          <div className="w-4 h-4 bg-red-500 rounded"></div>
-          <span className="text-sm font-medium text-gray-700">Cancelled</span>
+          <div className="w-3 h-3 sm:w-4 sm:h-4 bg-red-500 rounded"></div>
+          <span className="text-xs sm:text-sm font-medium text-gray-700">
+            Cancelled
+          </span>
         </div>
       </div>
 
@@ -372,7 +380,7 @@ export function BookingCalendar({ onClose }: BookingCalendarProps) {
           if (!open) setShowRescheduleForm(false);
         }}
       >
-        <DialogContent className="max-w-md">
+        <DialogContent className="w-[calc(100vw-1rem)] sm:w-[92vw] max-w-md max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Booking Details</DialogTitle>
             <DialogDescription>
@@ -383,7 +391,7 @@ export function BookingCalendar({ onClose }: BookingCalendarProps) {
 
           {selectedBooking && (
             <div className="space-y-4">
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
                   <p className="text-sm font-medium text-gray-600">Status</p>
                   <Badge
@@ -409,7 +417,7 @@ export function BookingCalendar({ onClose }: BookingCalendarProps) {
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
                   <p className="text-sm font-medium text-gray-600">Date</p>
                   <p className="text-sm mt-1">
@@ -433,14 +441,16 @@ export function BookingCalendar({ onClose }: BookingCalendarProps) {
                 </p>
               </div>
 
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
                   <p className="text-sm font-medium text-gray-600">Phone</p>
-                  <p className="text-sm mt-1">{selectedBooking.phone}</p>
+                  <p className="text-sm mt-1 truncate">
+                    {selectedBooking.phone}
+                  </p>
                 </div>
                 <div>
                   <p className="text-sm font-medium text-gray-600">Email</p>
-                  <p className="text-sm mt-1">
+                  <p className="text-sm mt-1 truncate">
                     {selectedBooking.email || "N/A"}
                   </p>
                 </div>
@@ -454,43 +464,45 @@ export function BookingCalendar({ onClose }: BookingCalendarProps) {
               )}
 
               {/* Action Buttons */}
-              <div className="flex gap-2 pt-4">
-                {selectedBooking.status === "pending" && (
-                  <Button
-                    onClick={handleConfirmBooking}
-                    className="flex-1 bg-green-600 hover:bg-green-700"
-                  >
-                    <Check className="w-4 h-4 mr-2" />
-                    Confirm
-                  </Button>
-                )}
-                {selectedBooking.status === "confirmed" && (
-                  <Button
-                    onClick={handleCompleteBooking}
-                    className="flex-1 bg-indigo-600 hover:bg-indigo-700"
-                  >
-                    <Check className="w-4 h-4 mr-2" />
-                    Mark Complete
-                  </Button>
-                )}
-                {(selectedBooking.status === "pending" ||
-                  selectedBooking.status === "confirmed") && (
-                  <Button
-                    variant="outline"
-                    className="flex-1 text-[#9A7B1D] border-[#9A7B1D] hover:bg-[#F5F1E8]"
-                    onClick={() => {
-                      setRescheduleDate(selectedBooking.date_str);
-                      setRescheduleTime(selectedBooking.time_str);
-                      setShowRescheduleForm((prev) => !prev);
-                    }}
-                  >
-                    <RefreshCw className="w-4 h-4 mr-2" />
-                    Reschedule
-                  </Button>
-                )}
+              <div className="flex flex-col gap-2 pt-4">
+                <div className="flex gap-2">
+                  {selectedBooking.status === "pending" && (
+                    <Button
+                      onClick={handleConfirmBooking}
+                      className="flex-1 bg-green-600 hover:bg-green-700 text-xs sm:text-sm"
+                    >
+                      <Check className="w-3 h-3 sm:w-4 sm:h-4 mr-1" />
+                      Confirm
+                    </Button>
+                  )}
+                  {selectedBooking.status === "confirmed" && (
+                    <Button
+                      onClick={handleCompleteBooking}
+                      className="flex-1 bg-indigo-600 hover:bg-indigo-700 text-xs sm:text-sm"
+                    >
+                      <Check className="w-3 h-3 sm:w-4 sm:h-4 mr-1" />
+                      Mark Complete
+                    </Button>
+                  )}
+                  {(selectedBooking.status === "pending" ||
+                    selectedBooking.status === "confirmed") && (
+                    <Button
+                      variant="outline"
+                      className="flex-1 text-[#9A7B1D] border-[#9A7B1D] hover:bg-[#F5F1E8] text-xs sm:text-sm"
+                      onClick={() => {
+                        setRescheduleDate(selectedBooking.date_str);
+                        setRescheduleTime(selectedBooking.time_str);
+                        setShowRescheduleForm((prev) => !prev);
+                      }}
+                    >
+                      <RefreshCw className="w-3 h-3 sm:w-4 sm:h-4 mr-1" />
+                      Reschedule
+                    </Button>
+                  )}
+                </div>
                 <Button
                   variant="outline"
-                  className="flex-1"
+                  className="w-full"
                   onClick={() => {
                     setShowDetails(false);
                     setShowRescheduleForm(false);
