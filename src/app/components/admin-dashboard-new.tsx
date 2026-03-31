@@ -955,14 +955,16 @@ function BookingsContent() {
                   )}
 
                   <div className="mt-4 flex gap-2">
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      className="text-green-600 border-green-600 hover:bg-green-50"
-                      onClick={() => handleConfirm(booking)}
-                    >
-                      Confirm
-                    </Button>
+                    {booking.status === "pending" && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="text-green-600 border-green-600 hover:bg-green-50"
+                        onClick={() => handleConfirm(booking)}
+                      >
+                        Confirm
+                      </Button>
+                    )}
                     <Button
                       size="sm"
                       variant="outline"
