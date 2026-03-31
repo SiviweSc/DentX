@@ -9,7 +9,7 @@ import { Contact } from "./components/contact";
 import { Footer } from "./components/footer";
 import { BookingForm } from "./components/booking-form";
 import { AdminLogin } from "./components/admin-login";
-import { AdminDashboard } from "./components/admin-dashboard";
+import { AdminDashboard } from "./components/admin-dashboard-new";
 import { DatabaseTest } from "./components/database-test";
 import { Toaster } from "./components/ui/sonner";
 

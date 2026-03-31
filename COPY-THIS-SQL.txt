@@ -22,7 +22,9 @@ CREATE TABLE IF NOT EXISTS bookings (
   source TEXT DEFAULT 'website',
   created_at TIMESTAMP DEFAULT NOW(),
   updated_at TIMESTAMP DEFAULT NOW()
-);
+    cancelled_at TIMESTAMP,
+    cancellation_reason TEXT
+  );
 
 -- Create booking_contacts table (separate from patients)
 CREATE TABLE IF NOT EXISTS booking_contacts (

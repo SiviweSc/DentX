@@ -18,7 +18,7 @@ export function Dialog({ open, onOpenChange, children }: DialogProps) {
       />
 
       {/* Dialog */}
-      <div className="relative bg-white rounded-lg shadow-xl max-w-md w-full mx-4 z-50">
+      <div className="relative bg-white rounded-lg shadow-xl z-50 w-auto max-w-[calc(100vw-1rem)] mx-2 sm:mx-4">
         {children}
       </div>
     </div>
