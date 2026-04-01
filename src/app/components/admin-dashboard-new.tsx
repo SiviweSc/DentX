@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { Button } from "./ui/button";
 import { Badge } from "./ui/badge";
+import { Switch } from "./ui/switch";
 import { Card, CardContent, CardHeader, CardTitle } from "./ui/card";
 import {
   Dialog,
@@ -35,6 +36,12 @@ import {
 import { supabase } from "../../../utils/supabase/client";
 import { format } from "date-fns";
 import { toast } from "sonner";
+import {
+  DEFAULT_AVAILABILITY_CONFIG,
+  fetchAvailabilityConfig,
+  SERVICE_CATALOG,
+  updateAvailabilityConfig,
+} from "../lib/availability";
 import logo from "../../assets/cadae8615ee9587c8f09fa141332814475e43e29.png";
 import { BookingCalendar } from "./booking-calendar";
 
@@ -43,10 +50,7 @@ interface AdminDashboardProps {
   authToken: string;
 }
 
-export function AdminDashboard({
-  onClose,
-  authToken: _authToken,
-}: AdminDashboardProps) {
+export function AdminDashboard({ onClose, authToken }: AdminDashboardProps) {
   const [activeSection, setActiveSection] = useState("dashboard");
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
@@ -62,12 +66,11 @@ export function AdminDashboard({
 
   const handleNavClick = (id: string) => {
     setActiveSection(id);
-    setSidebarOpen(false); // Close sidebar on mobile after selection
+    setSidebarOpen(false);
   };
 
   return (
     <div className="flex h-screen bg-gray-50">
-      {/* Mobile Overlay */}
       {sidebarOpen && (
         <div
           className="fixed inset-0 bg-black bg-opacity-50 z-30 md:hidden"
@@ -75,13 +78,11 @@ export function AdminDashboard({
         />
       )}
 
-      {/* Left Sidebar */}
       <aside
         className={`fixed md:relative w-64 h-screen bg-white border-r border-gray-200 flex flex-col transform transition-transform duration-300 ease-in-out z-40 ${
           sidebarOpen ? "translate-x-0" : "-translate-x-full"
         } md:translate-x-0`}
       >
-        {/* Logo */}
         <div className="p-6 border-b border-gray-200 flex items-center justify-between">
           <img src={logo} alt="DentX Quarters" className="h-12" />
           <button
@@ -92,7 +93,6 @@ export function AdminDashboard({
           </button>
         </div>
 
-        {/* Navigation */}
         <nav className="flex-1 overflow-y-auto p-4">
           <div className="space-y-1">
             {menuItems.map((item) => {
@@ -115,7 +115,6 @@ export function AdminDashboard({
           </div>
         </nav>
 
-        {/* Logout */}
         <div className="p-4 border-t border-gray-200">
           <Button
             onClick={onClose}
@@ -128,9 +127,7 @@ export function AdminDashboard({
         </div>
       </aside>
 
-      {/* Main Content */}
       <div className="flex-1 flex flex-col overflow-hidden">
-        {/* Top Bar */}
         <header className="bg-white border-b border-gray-200 px-4 md:px-8 py-4 flex items-center justify-between">
           <div className="flex items-center gap-4">
             <button
@@ -151,18 +148,206 @@ export function AdminDashboard({
           </div>
         </header>
 
-        {/* Content Area */}
         <main className="flex-1 overflow-y-auto p-4 md:p-8">
           {activeSection === "dashboard" && <DashboardContent />}
           {activeSection === "calendar" && <BookingCalendar />}
           {activeSection === "bookings" && <BookingsContent />}
           {activeSection === "patients" && <PatientsContent />}
-          {activeSection === "practice" && <PracticeManagementContent />}
+          {activeSection === "practice" && (
+            <PracticeManagementContent authToken={authToken} />
+          )}
           {activeSection === "activity" && <ActivityContent />}
-          {activeSection === "settings" && <SettingsContent />}
+          {activeSection === "settings" && (
+            <SettingsContent authToken={authToken} />
+          )}
         </main>
       </div>
     </div>
+  );
+}
+
+function AvailabilitySettingsPanel({ authToken }: { authToken: string }) {
+  const [availabilityConfig, setAvailabilityConfig] = useState(
+    DEFAULT_AVAILABILITY_CONFIG,
+  );
+  const [loadingAvailability, setLoadingAvailability] = useState(true);
+  const [savingKey, setSavingKey] = useState<string | null>(null);
+
+  useEffect(() => {
+    const loadAvailability = async () => {
+      setLoadingAvailability(true);
+      setAvailabilityConfig(await fetchAvailabilityConfig());
+      setLoadingAvailability(false);
+    };
+
+    loadAvailability();
+  }, []);
+
+  const persistAvailability = async (
+    nextConfig: typeof availabilityConfig,
+    key: string,
+  ) => {
+    try {
+      setSavingKey(key);
+      const savedConfig = await updateAvailabilityConfig(nextConfig, authToken);
+      setAvailabilityConfig(savedConfig);
+      toast.success("Availability updated");
+    } catch (error) {
+      console.error("Failed to update availability:", error);
+      toast.error("Failed to update availability");
+      setAvailabilityConfig(await fetchAvailabilityConfig());
+    } finally {
+      setSavingKey(null);
+    }
+  };
+
+  const toggleService = async (serviceId: string, enabled: boolean) => {
+    const nextConfig = {
+      ...availabilityConfig,
+      services: {
+        ...availabilityConfig.services,
+        [serviceId]: {
+          ...availabilityConfig.services[serviceId],
+          enabled,
+        },
+      },
+    };
+
+    setAvailabilityConfig(nextConfig);
+    await persistAvailability(nextConfig, `service:${serviceId}`);
+  };
+
+  const togglePractitioner = async (
+    serviceId: string,
+    practitionerId: string,
+    enabled: boolean,
+  ) => {
+    const nextConfig = {
+      ...availabilityConfig,
+      services: {
+        ...availabilityConfig.services,
+        [serviceId]: {
+          ...availabilityConfig.services[serviceId],
+          practitioners: {
+            ...availabilityConfig.services[serviceId].practitioners,
+            [practitionerId]: enabled,
+          },
+        },
+      },
+    };
+
+    setAvailabilityConfig(nextConfig);
+    await persistAvailability(
+      nextConfig,
+      `practitioner:${serviceId}:${practitionerId}`,
+    );
+  };
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Service Availability</CardTitle>
+      </CardHeader>
+      <CardContent>
+        {loadingAvailability ? (
+          <p className="text-gray-500">Loading availability settings...</p>
+        ) : (
+          <div className="space-y-4">
+            {SERVICE_CATALOG.map((service) => {
+              const serviceConfig = availabilityConfig.services[service.id];
+
+              return (
+                <div
+                  key={service.id}
+                  className="rounded-lg border border-gray-200 p-4"
+                >
+                  <div className="flex items-center justify-between gap-4">
+                    <div>
+                      <p className="text-sm font-semibold text-gray-900">
+                        {service.title}
+                      </p>
+                      <p className="text-xs text-gray-500">
+                        Frontend booking, public services, and admin calendar
+                        creation follow this toggle.
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <Badge
+                        className={
+                          serviceConfig.enabled
+                            ? "bg-green-100 text-green-800"
+                            : "bg-gray-100 text-gray-700"
+                        }
+                      >
+                        {serviceConfig.enabled ? "On" : "Off"}
+                      </Badge>
+                      <Switch
+                        checked={serviceConfig.enabled}
+                        disabled={savingKey === `service:${service.id}`}
+                        onCheckedChange={(checked) =>
+                          toggleService(service.id, checked)
+                        }
+                      />
+                    </div>
+                  </div>
+
+                  <div className="mt-4 space-y-3">
+                    {service.practitioners.map((practitioner) => (
+                      <div
+                        key={practitioner.id}
+                        className="flex items-center justify-between gap-4 rounded-md bg-gray-50 px-3 py-2"
+                      >
+                        <div>
+                          <p className="text-sm text-gray-800">
+                            {practitioner.title}
+                          </p>
+                          <p className="text-xs text-gray-500">
+                            Available when enabled and the parent service is on.
+                          </p>
+                        </div>
+                        <div className="flex items-center gap-3">
+                          <Badge
+                            className={
+                              availabilityConfig.services[service.id]
+                                .practitioners[practitioner.id]
+                                ? "bg-green-100 text-green-800"
+                                : "bg-gray-100 text-gray-700"
+                            }
+                          >
+                            {availabilityConfig.services[service.id]
+                              .practitioners[practitioner.id]
+                              ? "On"
+                              : "Off"}
+                          </Badge>
+                          <Switch
+                            checked={
+                              availabilityConfig.services[service.id]
+                                .practitioners[practitioner.id]
+                            }
+                            disabled={
+                              !serviceConfig.enabled ||
+                              savingKey ===
+                                `practitioner:${service.id}:${practitioner.id}`
+                            }
+                            onCheckedChange={(checked) =>
+                              togglePractitioner(
+                                service.id,
+                                practitioner.id,
+                                checked,
+                              )
+                            }
+                          />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 
@@ -643,7 +828,7 @@ function BookingsContent() {
         : "No date";
 
       if (action === "confirmed") {
-        message = `✅ BOOKING CONFIRMED - DentX Quarters\n\nHello ${booking.first_name},\n\nYour appointment has been confirmed!\n\nDate: ${dateStr}\nTime: ${booking.time}\nService: ${booking.service_type?.replace("-", " ")}\nPractitioner: ${booking.practitioner_type?.replace("-", " ")}\n\nLocation: DentX Quarters, Kempton Park\n\nIf you need to reschedule, please contact us at +27 68 534 0763\n\nSee you soon!`;
+        message = `✅ BOOKING CONFIRMED - DentX Quarters\n\nHello ${booking.first_name},\n\nYour appointment has been confirmed!\n\nDate: ${dateStr}\nTime: ${booking.time}\nService: ${booking.service_type?.replace("-", " ")}\nPractitioner: ${booking.practitioner_type?.replace("-", " ")}\n\nLocation: City Center Nelspruit, Main Road, Mbombela 312-JT, Mbombela, 1201\n\nIf you need to reschedule, please contact us at +27 68 534 0763\n\nSee you soon!`;
       } else if (action === "cancelled") {
         message = `❌ BOOKING CANCELLED - DentX Quarters\n\nHello ${booking.first_name},\n\nYour appointment has been cancelled.\n\nDate: ${dateStr}\nTime: ${booking.time}\nService: ${booking.service_type?.replace("-", " ")}\n\nTo book a new appointment, visit: dentxquarters.co.za\nOr call us: +27 68 534 0763`;
       } else if (action === "rescheduled" && newDateTime) {
@@ -2023,7 +2208,83 @@ function PatientsContent() {
   );
 }
 
-function PracticeManagementContent() {
+function PracticeManagementContent({ authToken }: { authToken: string }) {
+  const [availabilityConfig, setAvailabilityConfig] = useState(
+    DEFAULT_AVAILABILITY_CONFIG,
+  );
+  const [loadingAvailability, setLoadingAvailability] = useState(true);
+  const [savingKey, setSavingKey] = useState<string | null>(null);
+
+  useEffect(() => {
+    const loadAvailability = async () => {
+      setLoadingAvailability(true);
+      setAvailabilityConfig(await fetchAvailabilityConfig());
+      setLoadingAvailability(false);
+    };
+
+    loadAvailability();
+  }, []);
+
+  const persistAvailability = async (
+    nextConfig: typeof availabilityConfig,
+    key: string,
+  ) => {
+    try {
+      setSavingKey(key);
+      const savedConfig = await updateAvailabilityConfig(nextConfig, authToken);
+      setAvailabilityConfig(savedConfig);
+      toast.success("Availability updated");
+    } catch (error) {
+      console.error("Failed to update availability:", error);
+      toast.error("Failed to update availability");
+      setAvailabilityConfig(await fetchAvailabilityConfig());
+    } finally {
+      setSavingKey(null);
+    }
+  };
+
+  const toggleService = async (serviceId: string, enabled: boolean) => {
+    const nextConfig = {
+      ...availabilityConfig,
+      services: {
+        ...availabilityConfig.services,
+        [serviceId]: {
+          ...availabilityConfig.services[serviceId],
+          enabled,
+        },
+      },
+    };
+
+    setAvailabilityConfig(nextConfig);
+    await persistAvailability(nextConfig, `service:${serviceId}`);
+  };
+
+  const togglePractitioner = async (
+    serviceId: string,
+    practitionerId: string,
+    enabled: boolean,
+  ) => {
+    const nextConfig = {
+      ...availabilityConfig,
+      services: {
+        ...availabilityConfig.services,
+        [serviceId]: {
+          ...availabilityConfig.services[serviceId],
+          practitioners: {
+            ...availabilityConfig.services[serviceId].practitioners,
+            [practitionerId]: enabled,
+          },
+        },
+      },
+    };
+
+    setAvailabilityConfig(nextConfig);
+    await persistAvailability(
+      nextConfig,
+      `practitioner:${serviceId}:${practitionerId}`,
+    );
+  };
+
   return (
     <div className="space-y-6">
       <Card>
@@ -2054,7 +2315,8 @@ function PracticeManagementContent() {
               <div>
                 <p className="text-sm font-medium text-gray-500">Location</p>
                 <p className="text-base font-semibold">
-                  Kempton Park, South Africa
+                  City Center Nelspruit, Main Road, Mbombela 312-JT, Mbombela,
+                  1201
                 </p>
               </div>
             </div>
@@ -2074,32 +2336,6 @@ function PracticeManagementContent() {
             <Button className="mt-4 bg-[#9A7B1D] hover:bg-[#7d6418]">
               Add Staff Member
             </Button>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle>Services</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="space-y-2">
-              <div className="flex items-center justify-between">
-                <span className="text-sm">Dental Care</span>
-                <Badge>Active</Badge>
-              </div>
-              <div className="flex items-center justify-between">
-                <span className="text-sm">General Medicine</span>
-                <Badge>Active</Badge>
-              </div>
-              <div className="flex items-center justify-between">
-                <span className="text-sm">IV Drip Therapy</span>
-                <Badge>Active</Badge>
-              </div>
-              <div className="flex items-center justify-between">
-                <span className="text-sm">Physiotherapy</span>
-                <Badge>Active</Badge>
-              </div>
-            </div>
           </CardContent>
         </Card>
 
@@ -2149,27 +2385,283 @@ function PracticeManagementContent() {
 }
 
 function ActivityContent() {
+  const [activities, setActivities] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [filterType, setFilterType] = useState("all");
+  const [search, setSearch] = useState("");
+  const [fromDate, setFromDate] = useState("");
+  const [toDate, setToDate] = useState("");
+  const [fromTime, setFromTime] = useState("");
+  const [toTime, setToTime] = useState("");
+
+  useEffect(() => {
+    fetchActivities();
+  }, []);
+
+  const fetchActivities = async () => {
+    try {
+      setLoading(true);
+      const { data, error } = await supabase
+        .from("activity_log")
+        .select(
+          "id, type, user_name, user_role, timestamp, description, booking_id, patient_id",
+        )
+        .order("timestamp", { ascending: false })
+        .limit(200);
+
+      if (error) {
+        console.error("Failed to fetch activity log:", error);
+        toast.error("Failed to load activity log");
+        return;
+      }
+
+      setActivities(data || []);
+    } catch (err) {
+      console.error("Failed to fetch activity log:", err);
+      toast.error("Failed to load activity log");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const getTypeBadgeClass = (type: string) => {
+    if (type === "login") return "bg-blue-100 text-blue-800";
+    if (type === "booking_created") return "bg-green-100 text-green-800";
+    if (type === "booking_updated") return "bg-amber-100 text-amber-800";
+    if (type === "booking_deleted") return "bg-red-100 text-red-800";
+    return "bg-gray-100 text-gray-700";
+  };
+
+  const toLocalDateString = (date: Date) => {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, "0");
+    const day = String(date.getDate()).padStart(2, "0");
+    return `${year}-${month}-${day}`;
+  };
+
+  const toLocalTimeString = (date: Date) => {
+    const hours = String(date.getHours()).padStart(2, "0");
+    const minutes = String(date.getMinutes()).padStart(2, "0");
+    return `${hours}:${minutes}`;
+  };
+
+  const filteredActivities = activities.filter((activity) => {
+    const timestamp = activity.timestamp ? new Date(activity.timestamp) : null;
+
+    if (fromDate && timestamp && toLocalDateString(timestamp) < fromDate) {
+      return false;
+    }
+
+    if (toDate && timestamp && toLocalDateString(timestamp) > toDate) {
+      return false;
+    }
+
+    if (fromTime && timestamp && toLocalTimeString(timestamp) < fromTime) {
+      return false;
+    }
+
+    if (toTime && timestamp && toLocalTimeString(timestamp) > toTime) {
+      return false;
+    }
+
+    const typeMatch = filterType === "all" || activity.type === filterType;
+    if (!typeMatch) return false;
+
+    const q = search.trim().toLowerCase();
+    if (!q) return true;
+
+    return [
+      activity.type || "",
+      activity.user_name || "",
+      activity.user_role || "",
+      activity.description || "",
+      activity.booking_id || "",
+      activity.patient_id || "",
+    ]
+      .join(" ")
+      .toLowerCase()
+      .includes(q);
+  });
+
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Activity Log</CardTitle>
-      </CardHeader>
-      <CardContent>
-        <p className="text-center py-8 text-gray-500">No activity found</p>
-      </CardContent>
-    </Card>
+    <div className="space-y-6">
+      <Card>
+        <CardHeader className="flex flex-row items-center justify-between">
+          <CardTitle>Activity Log</CardTitle>
+          <Button
+            onClick={fetchActivities}
+            variant="outline"
+            size="sm"
+            className="flex items-center gap-2"
+          >
+            <RefreshCw className="w-4 h-4" />
+            Refresh
+          </Button>
+        </CardHeader>
+        <CardContent>
+          <div className="mb-4 grid grid-cols-1 md:grid-cols-2 gap-3">
+            <input
+              type="text"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search by user, description, booking ID..."
+              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#9A7B1D]"
+            />
+            <select
+              value={filterType}
+              onChange={(e) => setFilterType(e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#9A7B1D]"
+            >
+              <option value="all">All activity types</option>
+              <option value="login">Login</option>
+              <option value="booking_created">Booking Created</option>
+              <option value="booking_updated">Booking Updated</option>
+              <option value="booking_deleted">Booking Deleted</option>
+            </select>
+          </div>
+
+          <div className="mb-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+            <div>
+              <label className="block text-xs text-gray-600 mb-1">
+                From Date
+              </label>
+              <input
+                type="date"
+                value={fromDate}
+                onChange={(e) => setFromDate(e.target.value)}
+                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#9A7B1D]"
+              />
+            </div>
+            <div>
+              <label className="block text-xs text-gray-600 mb-1">
+                To Date
+              </label>
+              <input
+                type="date"
+                value={toDate}
+                onChange={(e) => setToDate(e.target.value)}
+                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#9A7B1D]"
+              />
+            </div>
+            <div>
+              <label className="block text-xs text-gray-600 mb-1">
+                From Time
+              </label>
+              <input
+                type="time"
+                value={fromTime}
+                onChange={(e) => setFromTime(e.target.value)}
+                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#9A7B1D]"
+              />
+            </div>
+            <div>
+              <label className="block text-xs text-gray-600 mb-1">
+                To Time
+              </label>
+              <input
+                type="time"
+                value={toTime}
+                onChange={(e) => setToTime(e.target.value)}
+                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#9A7B1D]"
+              />
+            </div>
+          </div>
+
+          <div className="mb-4 flex justify-end">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                setSearch("");
+                setFilterType("all");
+                setFromDate("");
+                setToDate("");
+                setFromTime("");
+                setToTime("");
+              }}
+            >
+              Clear Filters
+            </Button>
+          </div>
+
+          {loading ? (
+            <div className="text-center py-8">
+              <RefreshCw className="w-8 h-8 animate-spin mx-auto text-gray-400 mb-2" />
+              <p className="text-gray-500">Loading activity log...</p>
+            </div>
+          ) : filteredActivities.length === 0 ? (
+            <p className="text-center py-8 text-gray-500">No activity found</p>
+          ) : (
+            <div className="space-y-3">
+              {filteredActivities.map((activity) => (
+                <div
+                  key={activity.id}
+                  className="border border-gray-200 rounded-lg p-4 bg-white"
+                >
+                  <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-2">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <Badge className={getTypeBadgeClass(activity.type)}>
+                        {(activity.type || "unknown")
+                          .replace("_", " ")
+                          .replace("_", " ")}
+                      </Badge>
+                      <span className="text-sm text-gray-700 font-medium">
+                        {activity.user_name || "Unknown user"}
+                      </span>
+                      <span className="text-xs text-gray-500">
+                        {activity.user_role || "-"}
+                      </span>
+                    </div>
+                    <span className="text-xs sm:text-sm text-gray-500">
+                      {activity.timestamp
+                        ? format(new Date(activity.timestamp), "PPP p")
+                        : "No timestamp"}
+                    </span>
+                  </div>
+
+                  <p className="text-sm text-gray-700">
+                    {activity.description}
+                  </p>
+
+                  <div className="mt-2 flex flex-wrap gap-4 text-xs text-gray-500">
+                    {activity.booking_id && (
+                      <span>
+                        Booking ID:{" "}
+                        <span className="font-mono">{activity.booking_id}</span>
+                      </span>
+                    )}
+                    {activity.patient_id && (
+                      <span>
+                        Patient ID:{" "}
+                        <span className="font-mono">{activity.patient_id}</span>
+                      </span>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+    </div>
   );
 }
 
-function SettingsContent() {
+function SettingsContent({ authToken }: { authToken: string }) {
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Settings</CardTitle>
-      </CardHeader>
-      <CardContent>
-        <p className="text-gray-500">System settings and configurations</p>
-      </CardContent>
-    </Card>
+    <div className="space-y-6">
+      <Card>
+        <CardHeader>
+          <CardTitle>Settings</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <p className="text-gray-500">
+            Configure which services and practitioners are visible and bookable
+            across the frontend.
+          </p>
+        </CardContent>
+      </Card>
+      <AvailabilitySettingsPanel authToken={authToken} />
+    </div>
   );
 }

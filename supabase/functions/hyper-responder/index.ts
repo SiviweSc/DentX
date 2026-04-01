@@ -58,9 +58,178 @@ const requireAuth = async (c: any, next: any) => {
   }
 };
 
+const DEFAULT_AVAILABILITY_CONFIG = {
+  services: {
+    dental: {
+      enabled: true,
+      practitioners: {
+        "general-dentist": true,
+        "dental-therapist": true,
+        emergency: true,
+        "not-sure": true,
+      },
+    },
+    medical: {
+      enabled: true,
+      practitioners: {
+        "general-practitioner": true,
+        "clinical-associate": true,
+        "not-sure": true,
+      },
+    },
+    "iv-therapy": {
+      enabled: true,
+      practitioners: {
+        hydration: true,
+        "vitamin-boost": true,
+        immunity: true,
+        consultation: true,
+      },
+    },
+    physiotherapy: {
+      enabled: true,
+      practitioners: {
+        "sports-injury": true,
+        "pain-management": true,
+        rehabilitation: true,
+        "not-sure": true,
+      },
+    },
+  },
+};
+
+const normalizeAvailabilityConfig = (config: any) => {
+  const normalized = JSON.parse(JSON.stringify(DEFAULT_AVAILABILITY_CONFIG));
+
+  if (!config?.services) {
+    return normalized;
+  }
+
+  for (const [serviceId, serviceConfig] of Object.entries(
+    normalized.services,
+  )) {
+    const incomingService = config.services?.[serviceId];
+
+    if (typeof incomingService?.enabled === "boolean") {
+      serviceConfig.enabled = incomingService.enabled;
+    }
+
+    for (const practitionerId of Object.keys(serviceConfig.practitioners)) {
+      const enabled = incomingService?.practitioners?.[practitionerId];
+      if (typeof enabled === "boolean") {
+        serviceConfig.practitioners[practitionerId] = enabled;
+      }
+    }
+  }
+
+  return normalized;
+};
+
 // Health check endpoint
 app.get("/make-server-34100c2d/health", (c) => {
   return c.json({ status: "ok" });
+});
+
+app.get("/make-server-34100c2d/availability", async (c) => {
+  try {
+    const supabase = getSupabaseClient();
+    const { data: servicesData, error: servicesError } = await supabase
+      .from("service_availability")
+      .select("service_id, enabled");
+
+    const { data: practitionersData, error: practitionersError } =
+      await supabase
+        .from("practitioner_availability")
+        .select("service_id, practitioner_id, enabled");
+
+    if (servicesError || practitionersError) {
+      console.error(
+        "Availability fetch error:",
+        servicesError || practitionersError,
+      );
+      return c.json({ success: true, config: DEFAULT_AVAILABILITY_CONFIG });
+    }
+
+    const config = JSON.parse(JSON.stringify(DEFAULT_AVAILABILITY_CONFIG));
+
+    for (const service of servicesData || []) {
+      if (config.services[service.service_id]) {
+        config.services[service.service_id].enabled = service.enabled;
+      }
+    }
+
+    for (const practitioner of practitionersData || []) {
+      if (
+        config.services[practitioner.service_id]?.practitioners[
+          practitioner.practitioner_id
+        ] !== undefined
+      ) {
+        config.services[practitioner.service_id].practitioners[
+          practitioner.practitioner_id
+        ] = practitioner.enabled;
+      }
+    }
+
+    return c.json({
+      success: true,
+      config: normalizeAvailabilityConfig(config),
+    });
+  } catch (error) {
+    console.error("Availability fetch exception:", error);
+    return c.json({ success: true, config: DEFAULT_AVAILABILITY_CONFIG });
+  }
+});
+
+app.put("/make-server-34100c2d/availability", requireAuth, async (c) => {
+  try {
+    const { config } = await c.req.json();
+    const normalizedConfig = normalizeAvailabilityConfig(config);
+
+    const supabase = getSupabaseClient();
+    const serviceRows = Object.entries(normalizedConfig.services).map(
+      ([serviceId, serviceConfig]: any) => ({
+        service_id: serviceId,
+        enabled: serviceConfig.enabled,
+      }),
+    );
+
+    const practitionerRows = Object.entries(normalizedConfig.services).flatMap(
+      ([serviceId, serviceConfig]: any) =>
+        Object.entries(serviceConfig.practitioners).map(
+          ([practitionerId, enabled]) => ({
+            service_id: serviceId,
+            practitioner_id: practitionerId,
+            enabled,
+          }),
+        ),
+    );
+
+    const { error: servicesError } = await supabase
+      .from("service_availability")
+      .upsert(serviceRows, { onConflict: "service_id" });
+
+    if (servicesError) {
+      throw servicesError;
+    }
+
+    const { error: practitionersError } = await supabase
+      .from("practitioner_availability")
+      .upsert(practitionerRows, {
+        onConflict: "service_id,practitioner_id",
+      });
+
+    if (practitionersError) {
+      throw practitionersError;
+    }
+
+    return c.json({ success: true, config: normalizedConfig });
+  } catch (error) {
+    console.error("Availability update error:", error);
+    return c.json(
+      { error: "Failed to update availability: " + error.message },
+      500,
+    );
+  }
 });
 
 // Admin login endpoint

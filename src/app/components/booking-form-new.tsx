@@ -20,6 +20,12 @@ import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
 import { format } from "date-fns";
 import { toast } from "sonner";
 import { supabaseAdminApiBaseUrls } from "../../../utils/supabase/client";
+import {
+  DEFAULT_AVAILABILITY_CONFIG,
+  fetchAvailabilityConfig,
+  isPractitionerEnabled,
+  isServiceEnabled,
+} from "../lib/availability";
 import logo from "../../assets/cadae8615ee9587c8f09fa141332814475e43e29.png";
 
 interface BookingFormNewProps {
@@ -204,6 +210,10 @@ const TIME_SLOTS = [
 export function BookingFormNew({ onClose }: BookingFormNewProps) {
   const [step, setStep] = useState(1);
   const [bookedSlots, setBookedSlots] = useState<string[]>([]);
+  const [availabilityConfig, setAvailabilityConfig] = useState(
+    DEFAULT_AVAILABILITY_CONFIG,
+  );
+  const [availabilityLoading, setAvailabilityLoading] = useState(true);
   const [formData, setFormData] = useState<FormData>({
     serviceType: "",
     practitionerType: "",
@@ -218,6 +228,19 @@ export function BookingFormNew({ onClose }: BookingFormNewProps) {
     medicalAid: "",
     medicalAidNumber: "",
   });
+
+  const availableServices = SERVICES.filter((service) =>
+    isServiceEnabled(availabilityConfig, service.id),
+  );
+  const availablePractitioners = (
+    PRACTITIONERS[formData.serviceType as keyof typeof PRACTITIONERS] || []
+  ).filter((practitioner) =>
+    isPractitionerEnabled(
+      availabilityConfig,
+      formData.serviceType,
+      practitioner.id,
+    ),
+  );
 
   const getStartOfToday = () => {
     const today = new Date();
@@ -272,6 +295,48 @@ export function BookingFormNew({ onClose }: BookingFormNewProps) {
       }));
     }
   }, [step]);
+
+  useEffect(() => {
+    const loadAvailability = async () => {
+      setAvailabilityLoading(true);
+      const config = await fetchAvailabilityConfig();
+      setAvailabilityConfig(config);
+      setAvailabilityLoading(false);
+    };
+
+    loadAvailability();
+  }, []);
+
+  useEffect(() => {
+    if (
+      formData.serviceType &&
+      !isServiceEnabled(availabilityConfig, formData.serviceType)
+    ) {
+      setFormData((prev) => ({
+        ...prev,
+        serviceType: "",
+        practitionerType: "",
+      }));
+      setStep(1);
+    }
+  }, [availabilityConfig, formData.serviceType]);
+
+  useEffect(() => {
+    if (
+      formData.serviceType &&
+      formData.practitionerType &&
+      !isPractitionerEnabled(
+        availabilityConfig,
+        formData.serviceType,
+        formData.practitionerType,
+      )
+    ) {
+      setFormData((prev) => ({
+        ...prev,
+        practitionerType: "",
+      }));
+    }
+  }, [availabilityConfig, formData.practitionerType, formData.serviceType]);
 
   // Fetch booked slots when date changes
   useEffect(() => {
@@ -365,6 +430,24 @@ export function BookingFormNew({ onClose }: BookingFormNewProps) {
 
   const handleSubmit = async () => {
     try {
+      if (!isServiceEnabled(availabilityConfig, formData.serviceType)) {
+        toast.error("That service is currently unavailable");
+        setStep(1);
+        return;
+      }
+
+      if (
+        !isPractitionerEnabled(
+          availabilityConfig,
+          formData.serviceType,
+          formData.practitionerType,
+        )
+      ) {
+        toast.error("That practitioner is currently unavailable");
+        setStep(2);
+        return;
+      }
+
       // Generate a temporary booking ID
       const tempBookingId = `BK-${Date.now()}`;
 
@@ -634,37 +717,48 @@ This is an automated appointment request from dentxquarters.co.za`;
                 </h3>
                 <p className="text-gray-600 mb-8">Most frequently requested</p>
 
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 max-w-6xl mx-auto">
-                  {SERVICES.map((service) => {
-                    const Icon = service.icon;
-                    return (
-                      <button
-                        key={service.id}
-                        onClick={() => {
-                          updateFormData("serviceType", service.id);
-                          setStep(2);
-                        }}
-                        className={`group p-8 rounded-xl border-2 transition-all text-center hover:shadow-xl hover:scale-105 ${
-                          formData.serviceType === service.id
-                            ? "border-[#9A7B1D] bg-[#F5F1E8] shadow-lg"
-                            : "border-gray-200 hover:border-[#9A7B1D] bg-white"
-                        }`}
-                      >
-                        <div
-                          className={`w-16 h-16 mx-auto mb-4 rounded-2xl ${service.bgColor} flex items-center justify-center transition-transform group-hover:scale-110`}
+                {availabilityLoading ? (
+                  <div className="text-center py-12 text-gray-500">
+                    Loading available services...
+                  </div>
+                ) : availableServices.length === 0 ? (
+                  <div className="max-w-2xl mx-auto rounded-xl border border-amber-200 bg-amber-50 p-6 text-center text-amber-800">
+                    Online booking is currently unavailable. Please contact the
+                    practice directly.
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 max-w-6xl mx-auto">
+                    {availableServices.map((service) => {
+                      const Icon = service.icon;
+                      return (
+                        <button
+                          key={service.id}
+                          onClick={() => {
+                            updateFormData("serviceType", service.id);
+                            setStep(2);
+                          }}
+                          className={`group p-8 rounded-xl border-2 transition-all text-center hover:shadow-xl hover:scale-105 ${
+                            formData.serviceType === service.id
+                              ? "border-[#9A7B1D] bg-[#F5F1E8] shadow-lg"
+                              : "border-gray-200 hover:border-[#9A7B1D] bg-white"
+                          }`}
                         >
-                          <Icon className={`w-8 h-8 ${service.color}`} />
-                        </div>
-                        <h4 className="text-lg mb-2 text-gray-900">
-                          {service.title}
-                        </h4>
-                        <p className="text-sm text-gray-600 leading-relaxed">
-                          {service.description}
-                        </p>
-                      </button>
-                    );
-                  })}
-                </div>
+                          <div
+                            className={`w-16 h-16 mx-auto mb-4 rounded-2xl ${service.bgColor} flex items-center justify-center transition-transform group-hover:scale-110`}
+                          >
+                            <Icon className={`w-8 h-8 ${service.color}`} />
+                          </div>
+                          <h4 className="text-lg mb-2 text-gray-900">
+                            {service.title}
+                          </h4>
+                          <p className="text-sm text-gray-600 leading-relaxed">
+                            {service.description}
+                          </p>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
             )}
 
@@ -678,37 +772,41 @@ This is an automated appointment request from dentxquarters.co.za`;
                   Choose the type of specialist you'd like to see
                 </p>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6 mb-6 sm:mb-8 max-w-6xl mx-auto">
-                  {PRACTITIONERS[
-                    formData.serviceType as keyof typeof PRACTITIONERS
-                  ]?.map((practitioner) => {
-                    const Icon = practitioner.icon;
-                    return (
-                      <button
-                        key={practitioner.id}
-                        onClick={() => {
-                          updateFormData("practitionerType", practitioner.id);
-                          setStep(3);
-                        }}
-                        className={`group p-6 sm:p-8 rounded-xl border-2 transition-all text-center hover:shadow-xl hover:scale-105 ${
-                          formData.practitionerType === practitioner.id
-                            ? "border-[#9A7B1D] bg-[#F5F1E8] shadow-lg"
-                            : "border-gray-200 hover:border-[#9A7B1D] bg-white"
-                        }`}
-                      >
-                        <div className="w-14 h-14 sm:w-16 sm:h-16 mx-auto mb-3 sm:mb-4 rounded-2xl bg-gray-50 flex items-center justify-center transition-transform group-hover:scale-110">
-                          <Icon className="w-7 h-7 sm:w-8 sm:h-8 text-[#9A7B1D]" />
-                        </div>
-                        <h4 className="text-sm sm:text-base text-gray-900 mb-1">
-                          {practitioner.title}
-                        </h4>
-                        <p className="text-xs sm:text-sm text-gray-500 leading-relaxed">
-                          {practitioner.description}
-                        </p>
-                      </button>
-                    );
-                  })}
-                </div>
+                {availablePractitioners.length === 0 ? (
+                  <div className="max-w-2xl rounded-xl border border-amber-200 bg-amber-50 p-6 text-amber-800">
+                    No practitioners are currently available for this service.
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6 mb-6 sm:mb-8 max-w-6xl mx-auto">
+                    {availablePractitioners.map((practitioner) => {
+                      const Icon = practitioner.icon;
+                      return (
+                        <button
+                          key={practitioner.id}
+                          onClick={() => {
+                            updateFormData("practitionerType", practitioner.id);
+                            setStep(3);
+                          }}
+                          className={`group p-6 sm:p-8 rounded-xl border-2 transition-all text-center hover:shadow-xl hover:scale-105 ${
+                            formData.practitionerType === practitioner.id
+                              ? "border-[#9A7B1D] bg-[#F5F1E8] shadow-lg"
+                              : "border-gray-200 hover:border-[#9A7B1D] bg-white"
+                          }`}
+                        >
+                          <div className="w-14 h-14 sm:w-16 sm:h-16 mx-auto mb-3 sm:mb-4 rounded-2xl bg-gray-50 flex items-center justify-center transition-transform group-hover:scale-110">
+                            <Icon className="w-7 h-7 sm:w-8 sm:h-8 text-[#9A7B1D]" />
+                          </div>
+                          <h4 className="text-sm sm:text-base text-gray-900 mb-1">
+                            {practitioner.title}
+                          </h4>
+                          <p className="text-xs sm:text-sm text-gray-500 leading-relaxed">
+                            {practitioner.description}
+                          </p>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
 
                 <Button
                   variant="outline"

@@ -1,34 +1,37 @@
-import { useState, useEffect } from "react";
+import { useEffect, useState } from "react";
 import {
   Calendar as BigCalendar,
   dateFnsLocalizer,
   Event,
 } from "react-big-calendar";
-import {
-  format,
-  parse,
-  startOfWeek,
-  getDay,
-  addHours,
-  startOfMonth,
-  endOfMonth,
-  eachDayOfInterval,
-} from "date-fns";
+import { format, parse, startOfWeek, getDay } from "date-fns";
 import { enUS } from "date-fns/locale";
 import "react-big-calendar/lib/css/react-big-calendar.css";
 import { supabase } from "../../../utils/supabase/client";
 import { Badge } from "./ui/badge";
-import { Card, CardContent, CardHeader, CardTitle } from "./ui/card";
 import { Button } from "./ui/button";
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogHeader,
   DialogTitle,
-  DialogDescription,
 } from "./ui/dialog";
-import { Check, X, Clock, RefreshCw } from "lucide-react";
+import {
+  Check,
+  ChevronLeft,
+  ChevronRight,
+  Plus,
+  RefreshCw,
+} from "lucide-react";
 import { toast } from "sonner";
+import {
+  DEFAULT_AVAILABILITY_CONFIG,
+  fetchAvailabilityConfig,
+  isPractitionerEnabled,
+  isServiceEnabled,
+  SERVICE_CATALOG,
+} from "../lib/availability";
 
 const locales = {
   "en-US": enUS,
@@ -57,6 +60,24 @@ interface BookingEvent extends Event {
   phone: string;
   email?: string;
   reason?: string;
+  medical_aid?: string;
+  medical_aid_number?: string;
+  id_number?: string;
+}
+
+interface CreateBookingForm {
+  serviceType: string;
+  practitionerType: string;
+  date: string;
+  time: string;
+  reason: string;
+  firstName: string;
+  lastName: string;
+  email: string;
+  phone: string;
+  idNumber: string;
+  medicalAid: string;
+  medicalAidNumber: string;
 }
 
 const CALENDAR_TIME_SLOTS = [
@@ -78,36 +99,117 @@ const CALENDAR_TIME_SLOTS = [
   "16:00",
 ];
 
+const INITIAL_CREATE_FORM: CreateBookingForm = {
+  serviceType: "",
+  practitionerType: "",
+  date: "",
+  time: "",
+  reason: "",
+  firstName: "",
+  lastName: "",
+  email: "",
+  phone: "",
+  idNumber: "",
+  medicalAid: "",
+  medicalAidNumber: "",
+};
+
 interface BookingCalendarProps {
   onClose?: () => void;
 }
 
-export function BookingCalendar({ onClose }: BookingCalendarProps) {
+function toLocalDateString(date: Date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function getDatePart(value: string) {
+  return value.slice(0, 10);
+}
+
+function combineDateAndTime(dateValue: string, timeValue: string) {
+  const [year, month, day] = dateValue.split("-").map(Number);
+  const [hours, minutes] = timeValue.split(":").map(Number);
+  return new Date(year, month - 1, day, hours, minutes, 0, 0);
+}
+
+function getWeekRangeLabel(currentDate: Date) {
+  const weekStart = startOfWeek(currentDate, { weekStartsOn: 1 });
+  const weekEnd = new Date(weekStart);
+  weekEnd.setDate(weekStart.getDate() + 6);
+  return `${format(weekStart, "MMM d")} - ${format(weekEnd, "MMM d, yyyy")}`;
+}
+
+function CalendarEventContent({ event }: { event: BookingEvent }) {
+  return (
+    <div className="min-w-0 leading-tight">
+      <div className="font-semibold truncate">{event.time_str}</div>
+      <div className="truncate">
+        {event.first_name} {event.last_name}
+      </div>
+      <div className="truncate opacity-90">
+        {event.service_type?.replace(/-/g, " ")}
+      </div>
+    </div>
+  );
+}
+
+export function BookingCalendar({ onClose: _onClose }: BookingCalendarProps) {
   const [events, setEvents] = useState<BookingEvent[]>([]);
   const [loading, setLoading] = useState(true);
+  const [availabilityConfig, setAvailabilityConfig] = useState(
+    DEFAULT_AVAILABILITY_CONFIG,
+  );
   const [selectedBooking, setSelectedBooking] = useState<BookingEvent | null>(
     null,
   );
   const [showDetails, setShowDetails] = useState(false);
-  const [view, setView] = useState<"month" | "week" | "day">("month");
+  const [showCreateDialog, setShowCreateDialog] = useState(false);
   const [showRescheduleForm, setShowRescheduleForm] = useState(false);
   const [rescheduleDate, setRescheduleDate] = useState("");
   const [rescheduleTime, setRescheduleTime] = useState("");
+  const [currentDate, setCurrentDate] = useState(new Date());
+  const [createBookingForm, setCreateBookingForm] =
+    useState<CreateBookingForm>(INITIAL_CREATE_FORM);
+  const [creatingBooking, setCreatingBooking] = useState(false);
+  const availableServices = SERVICE_CATALOG.filter((service) =>
+    isServiceEnabled(availabilityConfig, service.id),
+  );
+  const availablePractitioners = (
+    SERVICE_CATALOG.find(
+      (service) => service.id === createBookingForm.serviceType,
+    )?.practitioners || []
+  ).filter((practitioner) =>
+    isPractitionerEnabled(
+      availabilityConfig,
+      createBookingForm.serviceType,
+      practitioner.id,
+    ),
+  );
 
   useEffect(() => {
     fetchBookings();
+  }, []);
+
+  useEffect(() => {
+    const loadAvailability = async () => {
+      setAvailabilityConfig(await fetchAvailabilityConfig());
+    };
+
+    loadAvailability();
   }, []);
 
   const fetchBookings = async () => {
     try {
       setLoading(true);
 
-      // Fetch all non-cancelled bookings
       const { data: bookingsData, error } = await supabase
         .from("bookings")
         .select("*")
-        .neq("status", "cancelled")
-        .order("date", { ascending: true });
+        .order("date", { ascending: true })
+        .order("time", { ascending: true });
 
       if (error) {
         console.error("Error fetching bookings:", error);
@@ -115,21 +217,18 @@ export function BookingCalendar({ onClose }: BookingCalendarProps) {
         return;
       }
 
-      // Transform bookings to calendar events
       const calendarEvents: BookingEvent[] = (bookingsData || []).map(
         (booking) => {
-          // Parse date and time
           const bookingDate = new Date(booking.date);
           const [hours, minutes] = booking.time.split(":").map(Number);
           bookingDate.setHours(hours, minutes, 0, 0);
 
-          // Create end time (30 minute appointment)
           const endTime = new Date(bookingDate);
           endTime.setMinutes(endTime.getMinutes() + 30);
 
           return {
             id: booking.id,
-            title: `${booking.first_name} ${booking.last_name} - ${booking.service_type?.replace("-", " ")}`,
+            title: `${booking.time} ${booking.first_name} ${booking.last_name}`,
             start: bookingDate,
             end: endTime,
             date_str: booking.date,
@@ -142,6 +241,9 @@ export function BookingCalendar({ onClose }: BookingCalendarProps) {
             phone: booking.phone,
             email: booking.email,
             reason: booking.reason,
+            medical_aid: booking.medical_aid,
+            medical_aid_number: booking.medical_aid_number,
+            id_number: booking.id_number,
           };
         },
       );
@@ -155,10 +257,157 @@ export function BookingCalendar({ onClose }: BookingCalendarProps) {
     }
   };
 
+  const openCreateDialog = (dateValue: string, timeValue: string) => {
+    setCreateBookingForm({
+      ...INITIAL_CREATE_FORM,
+      date: dateValue,
+      time: timeValue,
+    });
+    setShowCreateDialog(true);
+  };
+
   const handleSelectEvent = (event: BookingEvent) => {
+    if (event.status === "cancelled") {
+      openCreateDialog(getDatePart(event.date_str), event.time_str);
+      return;
+    }
+
     setSelectedBooking(event);
+    setRescheduleDate(getDatePart(event.date_str));
+    setRescheduleTime(event.time_str);
     setShowRescheduleForm(false);
     setShowDetails(true);
+  };
+
+  const handleSelectSlot = ({ start }: { start: Date }) => {
+    const dayOfWeek = start.getDay();
+    const slotDate = toLocalDateString(start);
+    const slotTime = format(start, "HH:mm");
+
+    if (dayOfWeek === 0) {
+      toast.error("Sunday is closed");
+      return;
+    }
+
+    if (!CALENDAR_TIME_SLOTS.includes(slotTime)) {
+      toast.error("Please select one of the 30-minute booking slots");
+      return;
+    }
+
+    const activeBookingExists = events.some(
+      (event) =>
+        event.status !== "cancelled" &&
+        getDatePart(event.date_str) === slotDate &&
+        event.time_str === slotTime,
+    );
+
+    if (activeBookingExists) {
+      toast.error("That slot already has an active booking");
+      return;
+    }
+
+    openCreateDialog(slotDate, slotTime);
+  };
+
+  const handleCreateBookingChange = (
+    field: keyof CreateBookingForm,
+    value: string,
+  ) => {
+    setCreateBookingForm((prev) => ({
+      ...prev,
+      [field]: value,
+      ...(field === "serviceType" ? { practitionerType: "" } : {}),
+    }));
+  };
+
+  const handleCreateBooking = async () => {
+    if (
+      !createBookingForm.firstName ||
+      !createBookingForm.lastName ||
+      !createBookingForm.phone ||
+      !createBookingForm.serviceType ||
+      !createBookingForm.practitionerType ||
+      !createBookingForm.date ||
+      !createBookingForm.time
+    ) {
+      toast.error("Please complete all required booking fields");
+      return;
+    }
+
+    if (!isServiceEnabled(availabilityConfig, createBookingForm.serviceType)) {
+      toast.error("That service is currently unavailable");
+      return;
+    }
+
+    if (
+      !isPractitionerEnabled(
+        availabilityConfig,
+        createBookingForm.serviceType,
+        createBookingForm.practitionerType,
+      )
+    ) {
+      toast.error("That practitioner is currently unavailable");
+      return;
+    }
+
+    try {
+      setCreatingBooking(true);
+
+      const dayStart = `${createBookingForm.date}T00:00:00`;
+      const dayEnd = `${createBookingForm.date}T23:59:59`;
+
+      const { data: conflictingBookings, error: conflictError } = await supabase
+        .from("bookings")
+        .select("id, status")
+        .gte("date", dayStart)
+        .lte("date", dayEnd)
+        .eq("time", createBookingForm.time)
+        .in("status", ["pending", "confirmed", "completed"]);
+
+      if (conflictError) {
+        toast.error("Failed to validate slot availability");
+        return;
+      }
+
+      if ((conflictingBookings || []).length > 0) {
+        toast.error("That slot is no longer available");
+        await fetchBookings();
+        return;
+      }
+
+      const { error } = await supabase.from("bookings").insert({
+        service_type: createBookingForm.serviceType,
+        practitioner_type: createBookingForm.practitionerType,
+        date: `${createBookingForm.date}T09:00:00`,
+        time: createBookingForm.time,
+        reason: createBookingForm.reason || "",
+        first_name: createBookingForm.firstName,
+        last_name: createBookingForm.lastName,
+        email: createBookingForm.email || "",
+        phone: createBookingForm.phone,
+        id_number: createBookingForm.idNumber || "",
+        medical_aid: createBookingForm.medicalAid || "",
+        medical_aid_number: createBookingForm.medicalAidNumber || "",
+        source: "admin-calendar",
+        status: "pending",
+      });
+
+      if (error) {
+        console.error("Error creating booking:", error);
+        toast.error("Failed to create booking");
+        return;
+      }
+
+      toast.success("Booking created for the selected slot");
+      setShowCreateDialog(false);
+      setCreateBookingForm(INITIAL_CREATE_FORM);
+      await fetchBookings();
+    } catch (err) {
+      console.error("Error creating booking:", err);
+      toast.error("Failed to create booking");
+    } finally {
+      setCreatingBooking(false);
+    }
   };
 
   const handleRescheduleSubmit = async () => {
@@ -171,7 +420,7 @@ export function BookingCalendar({ onClose }: BookingCalendarProps) {
       const { error } = await supabase
         .from("bookings")
         .update({
-          date: rescheduleDate,
+          date: `${rescheduleDate}T09:00:00`,
           time: rescheduleTime,
           status: "pending",
         })
@@ -183,7 +432,7 @@ export function BookingCalendar({ onClose }: BookingCalendarProps) {
       }
 
       toast.success(
-        "Booking rescheduled! Status reset to pending for re-confirmation.",
+        "Booking rescheduled. Status reset to pending for re-confirmation.",
       );
       setShowRescheduleForm(false);
       setShowDetails(false);
@@ -209,7 +458,7 @@ export function BookingCalendar({ onClose }: BookingCalendarProps) {
         return;
       }
 
-      toast.success("Booking confirmed!");
+      toast.success("Booking confirmed");
       setShowDetails(false);
       setSelectedBooking(null);
       fetchBookings();
@@ -233,7 +482,7 @@ export function BookingCalendar({ onClose }: BookingCalendarProps) {
         return;
       }
 
-      toast.success("Booking marked as completed!");
+      toast.success("Booking marked as completed");
       setShowDetails(false);
       setSelectedBooking(null);
       fetchBookings();
@@ -243,37 +492,68 @@ export function BookingCalendar({ onClose }: BookingCalendarProps) {
     }
   };
 
-  // Custom event style getter
   const eventStyleGetter = (event: BookingEvent) => {
-    let backgroundColor = "";
-    let borderColor = "";
-
     if (event.status === "confirmed") {
-      backgroundColor = "#10b981"; // Green
-      borderColor = "#059669";
-    } else if (event.status === "pending") {
-      backgroundColor = "#f59e0b"; // Amber
-      borderColor = "#d97706";
-    } else if (event.status === "completed") {
-      backgroundColor = "#6366f1"; // Indigo
-      borderColor = "#4f46e5";
-    } else if (event.status === "cancelled") {
-      backgroundColor = "#ef4444"; // Red
-      borderColor = "#dc2626";
+      return {
+        style: {
+          backgroundColor: "#10b981",
+          borderRadius: "10px",
+          color: "white",
+          border: "1px solid #059669",
+          fontWeight: 600,
+          padding: "2px 4px",
+        },
+      };
+    }
+
+    if (event.status === "pending") {
+      return {
+        style: {
+          backgroundColor: "#f59e0b",
+          borderRadius: "10px",
+          color: "white",
+          border: "1px solid #d97706",
+          fontWeight: 600,
+          padding: "2px 4px",
+        },
+      };
+    }
+
+    if (event.status === "completed") {
+      return {
+        style: {
+          backgroundColor: "#6366f1",
+          borderRadius: "10px",
+          color: "white",
+          border: "1px solid #4f46e5",
+          fontWeight: 600,
+          padding: "2px 4px",
+        },
+      };
     }
 
     return {
       style: {
-        backgroundColor,
-        borderRadius: "6px",
-        opacity: 1,
-        color: "white",
-        border: `2px solid ${borderColor}`,
-        display: "block",
-        fontWeight: 500,
+        backgroundColor: "#fff1f2",
+        borderRadius: "10px",
+        color: "#be123c",
+        border: "1px dashed #fb7185",
+        fontWeight: 600,
+        padding: "2px 4px",
+        opacity: 0.95,
       },
     };
   };
+
+  const weekStart = startOfWeek(currentDate, { weekStartsOn: 1 });
+  const calendarMinTime = combineDateAndTime(
+    toLocalDateString(weekStart),
+    "08:30",
+  );
+  const calendarMaxTime = combineDateAndTime(
+    toLocalDateString(weekStart),
+    "16:30",
+  );
 
   if (loading) {
     return (
@@ -288,91 +568,371 @@ export function BookingCalendar({ onClose }: BookingCalendarProps) {
 
   return (
     <div className="h-full flex flex-col">
-      <div className="mb-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+      <div className="mb-4 flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
         <div>
           <h2 className="text-lg sm:text-xl font-semibold text-gray-900">
-            Bookings Calendar
+            Weekly Calendar
           </h2>
           <p className="text-xs sm:text-sm text-gray-600 mt-1">
-            View and manage all bookings in calendar format
+            One week per screen. Click an empty slot or cancelled booking to add
+            a new booking.
           </p>
         </div>
-        <div className="flex flex-wrap gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <Button
-            variant={view === "month" ? "default" : "outline"}
+            variant="outline"
             size="sm"
-            onClick={() => setView("month")}
-            className={view === "month" ? "bg-[#9A7B1D]" : ""}
+            onClick={() =>
+              setCurrentDate(
+                new Date(
+                  currentDate.getFullYear(),
+                  currentDate.getMonth(),
+                  currentDate.getDate() - 7,
+                ),
+              )
+            }
           >
-            Month
+            <ChevronLeft className="w-4 h-4 mr-1" />
+            Prev Week
           </Button>
           <Button
-            variant={view === "week" ? "default" : "outline"}
+            variant="outline"
             size="sm"
-            onClick={() => setView("week")}
-            className={view === "week" ? "bg-[#9A7B1D]" : ""}
+            onClick={() => setCurrentDate(new Date())}
           >
-            Week
+            Today
           </Button>
           <Button
-            variant={view === "day" ? "default" : "outline"}
+            variant="outline"
             size="sm"
-            onClick={() => setView("day")}
-            className={view === "day" ? "bg-[#9A7B1D]" : ""}
+            onClick={() =>
+              setCurrentDate(
+                new Date(
+                  currentDate.getFullYear(),
+                  currentDate.getMonth(),
+                  currentDate.getDate() + 7,
+                ),
+              )
+            }
           >
-            Day
+            Next Week
+            <ChevronRight className="w-4 h-4 ml-1" />
+          </Button>
+          <Button
+            size="sm"
+            className="bg-[#9A7B1D] hover:bg-[#7d6418]"
+            onClick={() =>
+              openCreateDialog(
+                toLocalDateString(new Date()),
+                CALENDAR_TIME_SLOTS[0],
+              )
+            }
+          >
+            <Plus className="w-4 h-4 mr-1" />
+            Add Booking
           </Button>
         </div>
       </div>
 
-      {/* Legend */}
-      <div className="mb-4 bg-gray-50 p-2 sm:p-4 rounded-lg flex flex-wrap gap-2 sm:gap-4">
-        <div className="flex items-center gap-2">
-          <div className="w-3 h-3 sm:w-4 sm:h-4 bg-green-500 rounded"></div>
-          <span className="text-xs sm:text-sm font-medium text-gray-700">
-            Confirmed
-          </span>
+      <div className="mb-4 flex flex-col gap-3 rounded-lg border border-gray-200 bg-white p-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="text-sm font-medium text-gray-900">
+          {getWeekRangeLabel(currentDate)}
         </div>
-        <div className="flex items-center gap-2">
-          <div className="w-3 h-3 sm:w-4 sm:h-4 bg-amber-500 rounded"></div>
-          <span className="text-xs sm:text-sm font-medium text-gray-700">
-            Pending
-          </span>
-        </div>
-        <div className="flex items-center gap-2">
-          <div className="w-3 h-3 sm:w-4 sm:h-4 bg-indigo-500 rounded"></div>
-          <span className="text-xs sm:text-sm font-medium text-gray-700">
-            Completed
-          </span>
-        </div>
-        <div className="flex items-center gap-2">
-          <div className="w-3 h-3 sm:w-4 sm:h-4 bg-red-500 rounded"></div>
-          <span className="text-xs sm:text-sm font-medium text-gray-700">
-            Cancelled
-          </span>
+        <div className="flex flex-wrap gap-3 text-xs sm:text-sm text-gray-600">
+          <div className="flex items-center gap-2">
+            <div className="w-3 h-3 rounded bg-green-500"></div>
+            <span>Confirmed</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <div className="w-3 h-3 rounded bg-amber-500"></div>
+            <span>Pending</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <div className="w-3 h-3 rounded bg-indigo-500"></div>
+            <span>Completed</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <div className="w-3 h-3 rounded border border-dashed border-rose-400 bg-rose-50"></div>
+            <span>Cancelled slot available</span>
+          </div>
         </div>
       </div>
 
-      {/* Calendar */}
-      <div className="flex-1 bg-white rounded-lg border border-gray-200 overflow-hidden">
-        <BigCalendar
-          localizer={localizer}
-          events={events}
-          startAccessor="start"
-          endAccessor="end"
-          style={{ height: "100%" }}
-          onSelectEvent={handleSelectEvent}
-          eventPropGetter={eventStyleGetter}
-          view={view}
-          onView={() => {}}
-          views={["month", "week", "day"]}
-          popup
-          selectable
-          defaultDate={new Date()}
-        />
+      <div className="flex-1 overflow-x-auto rounded-lg border border-gray-200 bg-white">
+        <div className="min-w-[980px] h-[780px] [&_.rbc-time-view]:border-0 [&_.rbc-time-header-content]:border-l-0 [&_.rbc-time-content]:border-t [&_.rbc-timeslot-group]:min-h-[64px] [&_.rbc-toolbar]:hidden [&_.rbc-event]:shadow-none [&_.rbc-event-label]:hidden [&_.rbc-time-slot]:text-xs [&_.rbc-header]:py-3 [&_.rbc-header]:text-sm [&_.rbc-header]:font-semibold [&_.rbc-today]:bg-[#faf7ef] [&_.rbc-current-time-indicator]:bg-[#9A7B1D]">
+          <BigCalendar
+            localizer={localizer}
+            events={events}
+            startAccessor="start"
+            endAccessor="end"
+            defaultView="week"
+            view="week"
+            views={["week"]}
+            date={currentDate}
+            onNavigate={setCurrentDate}
+            style={{ height: "100%" }}
+            selectable
+            step={30}
+            timeslots={1}
+            min={calendarMinTime}
+            max={calendarMaxTime}
+            onSelectSlot={handleSelectSlot}
+            onSelectEvent={(event) => handleSelectEvent(event as BookingEvent)}
+            eventPropGetter={(event) => eventStyleGetter(event as BookingEvent)}
+            components={{
+              event: ({ event }) => (
+                <CalendarEventContent event={event as BookingEvent} />
+              ),
+            }}
+            dayLayoutAlgorithm="no-overlap"
+            popup={false}
+          />
+        </div>
       </div>
 
-      {/* Booking Details Dialog */}
+      <Dialog
+        open={showCreateDialog}
+        onOpenChange={(open) => {
+          setShowCreateDialog(open);
+          if (!open) {
+            setCreateBookingForm(INITIAL_CREATE_FORM);
+          }
+        }}
+      >
+        <DialogContent className="w-[calc(100vw-1rem)] sm:w-[92vw] max-w-2xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Create Booking</DialogTitle>
+            <DialogDescription>
+              Add a booking for {createBookingForm.date || "the selected date"}{" "}
+              at {createBookingForm.time || "the selected time"}.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Date
+                </label>
+                <input
+                  type="date"
+                  value={createBookingForm.date}
+                  onChange={(e) =>
+                    handleCreateBookingChange("date", e.target.value)
+                  }
+                  className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#9A7B1D]"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Time
+                </label>
+                <select
+                  value={createBookingForm.time}
+                  onChange={(e) =>
+                    handleCreateBookingChange("time", e.target.value)
+                  }
+                  className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#9A7B1D]"
+                >
+                  <option value="">Select time</option>
+                  {CALENDAR_TIME_SLOTS.map((slot) => (
+                    <option key={slot} value={slot}>
+                      {slot}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  First Name *
+                </label>
+                <input
+                  type="text"
+                  value={createBookingForm.firstName}
+                  onChange={(e) =>
+                    handleCreateBookingChange("firstName", e.target.value)
+                  }
+                  className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#9A7B1D]"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Last Name *
+                </label>
+                <input
+                  type="text"
+                  value={createBookingForm.lastName}
+                  onChange={(e) =>
+                    handleCreateBookingChange("lastName", e.target.value)
+                  }
+                  className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#9A7B1D]"
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Phone *
+                </label>
+                <input
+                  type="text"
+                  value={createBookingForm.phone}
+                  onChange={(e) =>
+                    handleCreateBookingChange("phone", e.target.value)
+                  }
+                  className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#9A7B1D]"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Email
+                </label>
+                <input
+                  type="email"
+                  value={createBookingForm.email}
+                  onChange={(e) =>
+                    handleCreateBookingChange("email", e.target.value)
+                  }
+                  className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#9A7B1D]"
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Service *
+                </label>
+                <select
+                  value={createBookingForm.serviceType}
+                  onChange={(e) =>
+                    handleCreateBookingChange("serviceType", e.target.value)
+                  }
+                  className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#9A7B1D]"
+                >
+                  <option value="">Select service</option>
+                  {availableServices.map((service) => (
+                    <option key={service.id} value={service.id}>
+                      {service.title}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Practitioner *
+                </label>
+                <select
+                  value={createBookingForm.practitionerType}
+                  onChange={(e) =>
+                    handleCreateBookingChange(
+                      "practitionerType",
+                      e.target.value,
+                    )
+                  }
+                  disabled={!createBookingForm.serviceType}
+                  className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#9A7B1D] disabled:bg-gray-100"
+                >
+                  <option value="">Select practitioner</option>
+                  {availablePractitioners.map((practitioner) => (
+                    <option key={practitioner.id} value={practitioner.id}>
+                      {practitioner.title}
+                    </option>
+                  ))}
+                </select>
+                {createBookingForm.serviceType &&
+                  availablePractitioners.length === 0 && (
+                    <p className="mt-2 text-xs text-amber-700">
+                      No practitioners are currently enabled for this service.
+                    </p>
+                  )}
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  ID Number
+                </label>
+                <input
+                  type="text"
+                  value={createBookingForm.idNumber}
+                  onChange={(e) =>
+                    handleCreateBookingChange("idNumber", e.target.value)
+                  }
+                  className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#9A7B1D]"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Medical Aid
+                </label>
+                <input
+                  type="text"
+                  value={createBookingForm.medicalAid}
+                  onChange={(e) =>
+                    handleCreateBookingChange("medicalAid", e.target.value)
+                  }
+                  className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#9A7B1D]"
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Medical Aid Number
+                </label>
+                <input
+                  type="text"
+                  value={createBookingForm.medicalAidNumber}
+                  onChange={(e) =>
+                    handleCreateBookingChange(
+                      "medicalAidNumber",
+                      e.target.value,
+                    )
+                  }
+                  className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#9A7B1D]"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Reason
+                </label>
+                <input
+                  type="text"
+                  value={createBookingForm.reason}
+                  onChange={(e) =>
+                    handleCreateBookingChange("reason", e.target.value)
+                  }
+                  className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#9A7B1D]"
+                />
+              </div>
+            </div>
+
+            <div className="flex flex-col-reverse sm:flex-row sm:justify-end gap-2 pt-2">
+              <Button
+                variant="outline"
+                onClick={() => setShowCreateDialog(false)}
+              >
+                Cancel
+              </Button>
+              <Button
+                onClick={handleCreateBooking}
+                disabled={creatingBooking}
+                className="bg-[#9A7B1D] hover:bg-[#7d6418]"
+              >
+                {creatingBooking ? "Creating..." : "Create Booking"}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
       <Dialog
         open={showDetails}
         onOpenChange={(open) => {
@@ -412,7 +972,7 @@ export function BookingCalendar({ onClose }: BookingCalendarProps) {
                 <div>
                   <p className="text-sm font-medium text-gray-600">Service</p>
                   <p className="text-sm mt-1">
-                    {selectedBooking.service_type?.replace("-", " ")}
+                    {selectedBooking.service_type?.replace(/-/g, " ")}
                   </p>
                 </div>
               </div>
@@ -437,7 +997,7 @@ export function BookingCalendar({ onClose }: BookingCalendarProps) {
                   Practitioner
                 </p>
                 <p className="text-sm mt-1">
-                  {selectedBooking.practitioner_type?.replace("-", " ")}
+                  {selectedBooking.practitioner_type?.replace(/-/g, " ")}
                 </p>
               </div>
 
@@ -463,7 +1023,6 @@ export function BookingCalendar({ onClose }: BookingCalendarProps) {
                 </div>
               )}
 
-              {/* Action Buttons */}
               <div className="flex flex-col gap-2 pt-4">
                 <div className="flex gap-2">
                   {selectedBooking.status === "pending" && (
@@ -489,11 +1048,7 @@ export function BookingCalendar({ onClose }: BookingCalendarProps) {
                     <Button
                       variant="outline"
                       className="flex-1 text-[#9A7B1D] border-[#9A7B1D] hover:bg-[#F5F1E8] text-xs sm:text-sm"
-                      onClick={() => {
-                        setRescheduleDate(selectedBooking.date_str);
-                        setRescheduleTime(selectedBooking.time_str);
-                        setShowRescheduleForm((prev) => !prev);
-                      }}
+                      onClick={() => setShowRescheduleForm((prev) => !prev)}
                     >
                       <RefreshCw className="w-3 h-3 sm:w-4 sm:h-4 mr-1" />
                       Reschedule
@@ -512,7 +1067,6 @@ export function BookingCalendar({ onClose }: BookingCalendarProps) {
                 </Button>
               </div>
 
-              {/* Inline Reschedule Form */}
               {showRescheduleForm && (
                 <div className="pt-4 border-t border-gray-200 space-y-3">
                   <p className="text-sm font-semibold text-gray-800">
