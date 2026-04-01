@@ -2293,28 +2293,32 @@ function PracticeManagementContent({ authToken }: { authToken: string }) {
         </CardHeader>
         <CardContent>
           <div className="space-y-4">
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
                 <p className="text-sm font-medium text-gray-500">
                   Practice Name
                 </p>
-                <p className="text-base font-semibold">DentX Quarters</p>
+                <p className="text-base font-semibold break-words">
+                  DentX Quarters
+                </p>
               </div>
               <div>
                 <p className="text-sm font-medium text-gray-500">
                   Contact Number
                 </p>
-                <p className="text-base font-semibold">+27 68 534 0763</p>
+                <p className="text-base font-semibold break-words">
+                  +27 68 534 0763
+                </p>
               </div>
               <div>
                 <p className="text-sm font-medium text-gray-500">Email</p>
-                <p className="text-base font-semibold">
+                <p className="text-base font-semibold break-words">
                   info@dentxquarters.co.za
                 </p>
               </div>
               <div>
                 <p className="text-sm font-medium text-gray-500">Location</p>
-                <p className="text-base font-semibold">
+                <p className="text-base font-semibold break-words">
                   City Center Nelspruit, Main Road, Mbombela 312-JT, Mbombela,
                   1201
                 </p>
