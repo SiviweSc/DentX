@@ -25,7 +25,7 @@ export const SERVICE_CATALOG: ServiceCatalogItem[] = [
     id: "dental",
     title: "Dental Care",
     practitioners: [
-      { id: "general-dentist", title: "General Dentist" },
+      { id: "general-dentist", title: "General Dentistry" },
       { id: "dental-therapist", title: "Dental Therapist" },
       { id: "emergency", title: "Emergency Dental" },
       { id: "not-sure", title: "I'm not sure" },

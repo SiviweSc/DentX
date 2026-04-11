@@ -91,7 +91,7 @@ const PRACTITIONERS = {
   dental: [
     {
       id: "general-dentist",
-      title: "General Dentist",
+      title: "General Dentistry",
       icon: Activity,
       description: "Regular dental care",
     },

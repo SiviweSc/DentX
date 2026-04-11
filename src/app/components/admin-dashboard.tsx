@@ -137,7 +137,7 @@ const SERVICES = [
 
 const PRACTITIONERS = {
   dental: [
-    { id: "general-dentist", title: "General Dentist" },
+    { id: "general-dentist", title: "General Dentistry" },
     { id: "dental-therapist", title: "Dental Therapist" },
     { id: "emergency", title: "Emergency Dental" },
   ],

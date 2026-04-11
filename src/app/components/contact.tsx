@@ -25,15 +25,31 @@ export function Contact() {
               </div>
               <h3 className="text-lg mb-2">Our Address</h3>
               <p className="text-gray-600 text-sm">
-                Shop F1A
-                <br />
-                City Centre Shopping Centre
-                <br />
-                5 Andrew Street
-                <br />
-                Nelspruit Extension 7<br />
-                1200
+                <a
+                  href="https://www.google.com/maps/search/?api=1&query=Shop+F1A+City+Centre+Shopping+Centre+5+Andrew+Street+Nelspruit+Extension+7+1200"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="hover:text-[#9A7B1D] transition-colors"
+                >
+                  Shop F1A
+                  <br />
+                  City Centre Shopping Centre
+                  <br />
+                  5 Andrew Street
+                  <br />
+                  Nelspruit Extension 7
+                  <br />
+                  1200
+                </a>
               </p>
+              <a
+                href="https://waze.com/ul?q=Shop+F1A+City+Centre+Shopping+Centre+5+Andrew+Street+Nelspruit+Extension+7+1200&navigate=yes"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-xs text-gray-500 hover:text-[#9A7B1D] transition-colors inline-block mt-2"
+              >
+                Open in Waze
+              </a>
             </CardContent>
           </Card>
 
