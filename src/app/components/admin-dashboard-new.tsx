@@ -39,6 +39,9 @@ import { toast } from "sonner";
 import {
   DEFAULT_AVAILABILITY_CONFIG,
   fetchAvailabilityConfig,
+  getAvailableTimeSlots,
+  isOperatingHoursRangeValid,
+  OPERATING_DAYS,
   SERVICE_CATALOG,
   updateAvailabilityConfig,
 } from "../lib/availability";
@@ -243,111 +246,251 @@ function AvailabilitySettingsPanel({ authToken }: { authToken: string }) {
     );
   };
 
+  const updateOperatingDay = async (
+    dayKey: (typeof OPERATING_DAYS)[number]["key"],
+    field: "enabled" | "start" | "end",
+    value: boolean | string,
+  ) => {
+    const currentDay = availabilityConfig.operatingHours[dayKey];
+    const nextDay = {
+      ...currentDay,
+      [field]: value,
+    };
+
+    if (
+      nextDay.enabled &&
+      !isOperatingHoursRangeValid(nextDay.start, nextDay.end)
+    ) {
+      toast.error("Operating hours must allow at least one 30-minute slot");
+      return;
+    }
+
+    const nextConfig = {
+      ...availabilityConfig,
+      operatingHours: {
+        ...availabilityConfig.operatingHours,
+        [dayKey]: nextDay,
+      },
+    };
+
+    setAvailabilityConfig(nextConfig);
+    await persistAvailability(nextConfig, `hours:${dayKey}:${field}`);
+  };
+
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Service Availability</CardTitle>
-      </CardHeader>
-      <CardContent>
-        {loadingAvailability ? (
-          <p className="text-gray-500">Loading availability settings...</p>
-        ) : (
-          <div className="space-y-4">
-            {SERVICE_CATALOG.map((service) => {
-              const serviceConfig = availabilityConfig.services[service.id];
+    <div className="space-y-6">
+      <Card>
+        <CardHeader>
+          <CardTitle>Operating Hours</CardTitle>
+        </CardHeader>
+        <CardContent>
+          {loadingAvailability ? (
+            <p className="text-gray-500">Loading availability settings...</p>
+          ) : (
+            <div className="space-y-3">
+              {OPERATING_DAYS.map((day) => {
+                const dayConfig = availabilityConfig.operatingHours[day.key];
+                const slots = dayConfig.enabled
+                  ? getAvailableTimeSlots(
+                      availabilityConfig,
+                      new Date(
+                        `${
+                          {
+                            monday: "2026-04-06",
+                            tuesday: "2026-04-07",
+                            wednesday: "2026-04-08",
+                            thursday: "2026-04-09",
+                            friday: "2026-04-10",
+                            saturday: "2026-04-11",
+                            sunday: "2026-04-12",
+                          }[day.key]
+                        }T12:00:00`,
+                      ),
+                    )
+                  : [];
 
-              return (
-                <div
-                  key={service.id}
-                  className="rounded-lg border border-gray-200 p-4"
-                >
-                  <div className="flex items-center justify-between gap-4">
-                    <div>
-                      <p className="text-sm font-semibold text-gray-900">
-                        {service.title}
-                      </p>
-                      <p className="text-xs text-gray-500">
-                        Frontend booking, public services, and admin calendar
-                        creation follow this toggle.
-                      </p>
-                    </div>
-                    <div className="flex items-center gap-3">
-                      <Badge
-                        className={
-                          serviceConfig.enabled
-                            ? "bg-green-100 text-green-800"
-                            : "bg-gray-100 text-gray-700"
-                        }
-                      >
-                        {serviceConfig.enabled ? "On" : "Off"}
-                      </Badge>
-                      <Switch
-                        checked={serviceConfig.enabled}
-                        disabled={savingKey === `service:${service.id}`}
-                        onCheckedChange={(checked) =>
-                          toggleService(service.id, checked)
-                        }
-                      />
-                    </div>
-                  </div>
-
-                  <div className="mt-4 space-y-3">
-                    {service.practitioners.map((practitioner) => (
-                      <div
-                        key={practitioner.id}
-                        className="flex items-center justify-between gap-4 rounded-md bg-gray-50 px-3 py-2"
-                      >
-                        <div>
-                          <p className="text-sm text-gray-800">
-                            {practitioner.title}
-                          </p>
-                          <p className="text-xs text-gray-500">
-                            Available when enabled and the parent service is on.
-                          </p>
-                        </div>
-                        <div className="flex items-center gap-3">
-                          <Badge
-                            className={
-                              availabilityConfig.services[service.id]
-                                .practitioners[practitioner.id]
-                                ? "bg-green-100 text-green-800"
-                                : "bg-gray-100 text-gray-700"
-                            }
-                          >
-                            {availabilityConfig.services[service.id]
-                              .practitioners[practitioner.id]
-                              ? "On"
-                              : "Off"}
-                          </Badge>
-                          <Switch
-                            checked={
-                              availabilityConfig.services[service.id]
-                                .practitioners[practitioner.id]
-                            }
-                            disabled={
-                              !serviceConfig.enabled ||
-                              savingKey ===
-                                `practitioner:${service.id}:${practitioner.id}`
-                            }
-                            onCheckedChange={(checked) =>
-                              togglePractitioner(
-                                service.id,
-                                practitioner.id,
-                                checked,
-                              )
-                            }
-                          />
-                        </div>
+                return (
+                  <div
+                    key={day.key}
+                    className="rounded-lg border border-gray-200 p-4"
+                  >
+                    <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+                      <div>
+                        <p className="text-sm font-semibold text-gray-900">
+                          {day.label}
+                        </p>
+                        <p className="text-xs text-gray-500 mt-1">
+                          {dayConfig.enabled
+                            ? `${slots.length} booking slot${slots.length === 1 ? "" : "s"} available`
+                            : "Closed for bookings"}
+                        </p>
                       </div>
-                    ))}
+                      <div className="flex items-center gap-3">
+                        <Badge
+                          className={
+                            dayConfig.enabled
+                              ? "bg-green-100 text-green-800"
+                              : "bg-gray-100 text-gray-700"
+                          }
+                        >
+                          {dayConfig.enabled ? "Open" : "Closed"}
+                        </Badge>
+                        <Switch
+                          checked={dayConfig.enabled}
+                          disabled={savingKey === `hours:${day.key}:enabled`}
+                          onCheckedChange={(checked) =>
+                            updateOperatingDay(day.key, "enabled", checked)
+                          }
+                        />
+                      </div>
+                    </div>
+
+                    <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-xs font-medium text-gray-600 mb-1">
+                          Opens
+                        </label>
+                        <input
+                          type="time"
+                          step="1800"
+                          value={dayConfig.start}
+                          disabled={!dayConfig.enabled}
+                          onChange={(e) =>
+                            updateOperatingDay(day.key, "start", e.target.value)
+                          }
+                          className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#9A7B1D] disabled:bg-gray-100"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-gray-600 mb-1">
+                          Closes
+                        </label>
+                        <input
+                          type="time"
+                          step="1800"
+                          value={dayConfig.end}
+                          disabled={!dayConfig.enabled}
+                          onChange={(e) =>
+                            updateOperatingDay(day.key, "end", e.target.value)
+                          }
+                          className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#9A7B1D] disabled:bg-gray-100"
+                        />
+                      </div>
+                    </div>
                   </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </CardContent>
-    </Card>
+                );
+              })}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Service Availability</CardTitle>
+        </CardHeader>
+        <CardContent>
+          {loadingAvailability ? (
+            <p className="text-gray-500">Loading availability settings...</p>
+          ) : (
+            <div className="space-y-4">
+              {SERVICE_CATALOG.map((service) => {
+                const serviceConfig = availabilityConfig.services[service.id];
+
+                return (
+                  <div
+                    key={service.id}
+                    className="rounded-lg border border-gray-200 p-4"
+                  >
+                    <div className="flex items-center justify-between gap-4">
+                      <div>
+                        <p className="text-sm font-semibold text-gray-900">
+                          {service.title}
+                        </p>
+                        <p className="text-xs text-gray-500">
+                          Frontend booking, public services, and admin calendar
+                          creation follow this toggle.
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-3">
+                        <Badge
+                          className={
+                            serviceConfig.enabled
+                              ? "bg-green-100 text-green-800"
+                              : "bg-gray-100 text-gray-700"
+                          }
+                        >
+                          {serviceConfig.enabled ? "On" : "Off"}
+                        </Badge>
+                        <Switch
+                          checked={serviceConfig.enabled}
+                          disabled={savingKey === `service:${service.id}`}
+                          onCheckedChange={(checked) =>
+                            toggleService(service.id, checked)
+                          }
+                        />
+                      </div>
+                    </div>
+
+                    <div className="mt-4 space-y-3">
+                      {service.practitioners.map((practitioner) => (
+                        <div
+                          key={practitioner.id}
+                          className="flex items-center justify-between gap-4 rounded-md bg-gray-50 px-3 py-2"
+                        >
+                          <div>
+                            <p className="text-sm text-gray-800">
+                              {practitioner.title}
+                            </p>
+                            <p className="text-xs text-gray-500">
+                              Available when enabled and the parent service is
+                              on.
+                            </p>
+                          </div>
+                          <div className="flex items-center gap-3">
+                            <Badge
+                              className={
+                                availabilityConfig.services[service.id]
+                                  .practitioners[practitioner.id]
+                                  ? "bg-green-100 text-green-800"
+                                  : "bg-gray-100 text-gray-700"
+                              }
+                            >
+                              {availabilityConfig.services[service.id]
+                                .practitioners[practitioner.id]
+                                ? "On"
+                                : "Off"}
+                            </Badge>
+                            <Switch
+                              checked={
+                                availabilityConfig.services[service.id]
+                                  .practitioners[practitioner.id]
+                              }
+                              disabled={
+                                !serviceConfig.enabled ||
+                                savingKey ===
+                                  `practitioner:${service.id}:${practitioner.id}`
+                              }
+                              onCheckedChange={(checked) =>
+                                togglePractitioner(
+                                  service.id,
+                                  practitioner.id,
+                                  checked,
+                                )
+                              }
+                            />
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+    </div>
   );
 }
 
@@ -2660,8 +2803,8 @@ function SettingsContent({ authToken }: { authToken: string }) {
         </CardHeader>
         <CardContent>
           <p className="text-gray-500">
-            Configure which services and practitioners are visible and bookable
-            across the frontend.
+            Configure operating hours, services, and practitioners that can be
+            booked across the frontend.
           </p>
         </CardContent>
       </Card>

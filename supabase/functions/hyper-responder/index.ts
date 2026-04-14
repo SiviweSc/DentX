@@ -96,6 +96,120 @@ const DEFAULT_AVAILABILITY_CONFIG = {
       },
     },
   },
+  operatingHours: {
+    sunday: { enabled: false, start: "09:00", end: "13:30" },
+    monday: { enabled: true, start: "08:30", end: "16:30" },
+    tuesday: { enabled: true, start: "08:30", end: "16:30" },
+    wednesday: { enabled: true, start: "08:30", end: "16:30" },
+    thursday: { enabled: true, start: "08:30", end: "16:30" },
+    friday: { enabled: true, start: "08:30", end: "16:30" },
+    saturday: { enabled: true, start: "09:00", end: "13:30" },
+  },
+};
+
+const DAY_INDEX_TO_KEY = [
+  "sunday",
+  "monday",
+  "tuesday",
+  "wednesday",
+  "thursday",
+  "friday",
+  "saturday",
+];
+
+const normalizeTimeValue = (value: unknown, fallback: string) => {
+  if (typeof value !== "string") {
+    return fallback;
+  }
+
+  const match = value.match(/^(\d{2}):(\d{2})/);
+  if (!match) {
+    return fallback;
+  }
+
+  return `${match[1]}:${match[2]}`;
+};
+
+const timeStringToMinutes = (value: string) => {
+  const normalized = normalizeTimeValue(value, "");
+  if (!normalized) {
+    return null;
+  }
+
+  const [hours, minutes] = normalized.split(":").map(Number);
+
+  if (
+    Number.isNaN(hours) ||
+    Number.isNaN(minutes) ||
+    hours < 0 ||
+    hours > 23 ||
+    minutes < 0 ||
+    minutes > 59
+  ) {
+    return null;
+  }
+
+  return hours * 60 + minutes;
+};
+
+const isOperatingHoursRangeValid = (
+  start: string,
+  end: string,
+  slotDurationMinutes = 30,
+) => {
+  const startMinutes = timeStringToMinutes(start);
+  const endMinutes = timeStringToMinutes(end);
+
+  if (startMinutes === null || endMinutes === null) {
+    return false;
+  }
+
+  return endMinutes - startMinutes >= slotDurationMinutes;
+};
+
+const getDatePart = (value: string) => String(value || "").slice(0, 10);
+
+const getOperatingDayKey = (date: Date) => DAY_INDEX_TO_KEY[date.getDay()];
+
+const getAvailableTimeSlots = (dayConfig: any, slotDurationMinutes = 30) => {
+  if (
+    !dayConfig?.enabled ||
+    !isOperatingHoursRangeValid(
+      dayConfig.start,
+      dayConfig.end,
+      slotDurationMinutes,
+    )
+  ) {
+    return [];
+  }
+
+  const startMinutes = timeStringToMinutes(dayConfig.start);
+  const endMinutes = timeStringToMinutes(dayConfig.end);
+
+  if (startMinutes === null || endMinutes === null) {
+    return [];
+  }
+
+  const slots = [];
+
+  for (
+    let current = startMinutes;
+    current + slotDurationMinutes <= endMinutes;
+    current += slotDurationMinutes
+  ) {
+    const hours = String(Math.floor(current / 60)).padStart(2, "0");
+    const minutes = String(current % 60).padStart(2, "0");
+    slots.push(`${hours}:${minutes}`);
+  }
+
+  return slots;
+};
+
+const isTimeWithinOperatingHours = (config: any, date: Date, time: string) => {
+  const dayKey = getOperatingDayKey(date);
+  return getAvailableTimeSlots(config.operatingHours?.[dayKey]).includes(
+    normalizeTimeValue(time, ""),
+  );
 };
 
 const normalizeAvailabilityConfig = (config: any) => {
@@ -122,43 +236,44 @@ const normalizeAvailabilityConfig = (config: any) => {
     }
   }
 
+  for (const [dayKey, dayConfig] of Object.entries(normalized.operatingHours)) {
+    const incomingDay = config?.operatingHours?.[dayKey];
+
+    if (typeof incomingDay?.enabled === "boolean") {
+      dayConfig.enabled = incomingDay.enabled;
+    }
+
+    dayConfig.start = normalizeTimeValue(incomingDay?.start, dayConfig.start);
+    dayConfig.end = normalizeTimeValue(incomingDay?.end, dayConfig.end);
+  }
+
   return normalized;
 };
 
-// Health check endpoint
-app.get("/make-server-34100c2d/health", (c) => {
-  return c.json({ status: "ok" });
-});
-
-app.get("/make-server-34100c2d/availability", async (c) => {
-  try {
-    const supabase = getSupabaseClient();
-    const { data: servicesData, error: servicesError } = await supabase
-      .from("service_availability")
-      .select("service_id, enabled");
-
-    const { data: practitionersData, error: practitionersError } =
-      await supabase
+const fetchAvailabilityConfigFromDb = async (supabase: any) => {
+  const [servicesResult, practitionersResult, operatingHoursResult] =
+    await Promise.all([
+      supabase.from("service_availability").select("service_id, enabled"),
+      supabase
         .from("practitioner_availability")
-        .select("service_id, practitioner_id, enabled");
+        .select("service_id, practitioner_id, enabled"),
+      supabase
+        .from("operating_hours")
+        .select("day_of_week, enabled, start_time, end_time"),
+    ]);
 
-    if (servicesError || practitionersError) {
-      console.error(
-        "Availability fetch error:",
-        servicesError || practitionersError,
-      );
-      return c.json({ success: true, config: DEFAULT_AVAILABILITY_CONFIG });
-    }
+  const config = JSON.parse(JSON.stringify(DEFAULT_AVAILABILITY_CONFIG));
 
-    const config = JSON.parse(JSON.stringify(DEFAULT_AVAILABILITY_CONFIG));
-
-    for (const service of servicesData || []) {
+  if (!servicesResult.error) {
+    for (const service of servicesResult.data || []) {
       if (config.services[service.service_id]) {
         config.services[service.service_id].enabled = service.enabled;
       }
     }
+  }
 
-    for (const practitioner of practitionersData || []) {
+  if (!practitionersResult.error) {
+    for (const practitioner of practitionersResult.data || []) {
       if (
         config.services[practitioner.service_id]?.practitioners[
           practitioner.practitioner_id
@@ -169,10 +284,41 @@ app.get("/make-server-34100c2d/availability", async (c) => {
         ] = practitioner.enabled;
       }
     }
+  }
 
+  if (!operatingHoursResult.error) {
+    for (const row of operatingHoursResult.data || []) {
+      const dayKey = DAY_INDEX_TO_KEY[row.day_of_week];
+      if (dayKey && config.operatingHours[dayKey]) {
+        config.operatingHours[dayKey] = {
+          enabled: row.enabled,
+          start: normalizeTimeValue(
+            row.start_time,
+            config.operatingHours[dayKey].start,
+          ),
+          end: normalizeTimeValue(
+            row.end_time,
+            config.operatingHours[dayKey].end,
+          ),
+        };
+      }
+    }
+  }
+
+  return normalizeAvailabilityConfig(config);
+};
+
+// Health check endpoint
+app.get("/make-server-34100c2d/health", (c) => {
+  return c.json({ status: "ok" });
+});
+
+app.get("/make-server-34100c2d/availability", async (c) => {
+  try {
+    const supabase = getSupabaseClient();
     return c.json({
       success: true,
-      config: normalizeAvailabilityConfig(config),
+      config: await fetchAvailabilityConfigFromDb(supabase),
     });
   } catch (error) {
     console.error("Availability fetch exception:", error);
@@ -204,6 +350,15 @@ app.put("/make-server-34100c2d/availability", requireAuth, async (c) => {
         ),
     );
 
+    const operatingHoursRows = Object.entries(
+      normalizedConfig.operatingHours,
+    ).map(([dayKey, dayConfig]: any) => ({
+      day_of_week: DAY_INDEX_TO_KEY.indexOf(dayKey),
+      enabled: dayConfig.enabled,
+      start_time: dayConfig.start,
+      end_time: dayConfig.end,
+    }));
+
     const { error: servicesError } = await supabase
       .from("service_availability")
       .upsert(serviceRows, { onConflict: "service_id" });
@@ -220,6 +375,14 @@ app.put("/make-server-34100c2d/availability", requireAuth, async (c) => {
 
     if (practitionersError) {
       throw practitionersError;
+    }
+
+    const { error: operatingHoursError } = await supabase
+      .from("operating_hours")
+      .upsert(operatingHoursRows, { onConflict: "day_of_week" });
+
+    if (operatingHoursError) {
+      throw operatingHoursError;
     }
 
     return c.json({ success: true, config: normalizedConfig });
@@ -352,6 +515,36 @@ app.post("/make-server-34100c2d/bookings", async (c) => {
     const bookingData = await c.req.json();
 
     const supabase = getSupabaseClient();
+    const availabilityConfig = await fetchAvailabilityConfigFromDb(supabase);
+    const bookingDatePart = getDatePart(bookingData.date);
+    const bookingTime = normalizeTimeValue(bookingData.time, "");
+
+    if (!bookingDatePart || !bookingTime) {
+      return c.json({ error: "Invalid booking date or time" }, 400);
+    }
+
+    const bookingDate = new Date(`${bookingDatePart}T12:00:00`);
+
+    if (!availabilityConfig.services?.[bookingData.serviceType]?.enabled) {
+      return c.json({ error: "That service is currently unavailable" }, 400);
+    }
+
+    if (
+      availabilityConfig.services?.[bookingData.serviceType]?.practitioners?.[
+        bookingData.practitionerType
+      ] !== true
+    ) {
+      return c.json(
+        { error: "That practitioner is currently unavailable" },
+        400,
+      );
+    }
+
+    if (
+      !isTimeWithinOperatingHours(availabilityConfig, bookingDate, bookingTime)
+    ) {
+      return c.json({ error: "That time is outside operating hours" }, 400);
+    }
 
     // Insert booking
     const { data: booking, error: bookingError } = await supabase
@@ -360,7 +553,7 @@ app.post("/make-server-34100c2d/bookings", async (c) => {
         service_type: bookingData.serviceType,
         practitioner_type: bookingData.practitionerType,
         date: bookingData.date,
-        time: bookingData.time,
+        time: bookingTime,
         reason: bookingData.reason || "",
         first_name: bookingData.firstName,
         last_name: bookingData.lastName,

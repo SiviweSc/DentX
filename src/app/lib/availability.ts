@@ -16,9 +16,61 @@ export interface AvailabilityServiceConfig {
   practitioners: Record<string, boolean>;
 }
 
+export type OperatingDayKey =
+  | "sunday"
+  | "monday"
+  | "tuesday"
+  | "wednesday"
+  | "thursday"
+  | "friday"
+  | "saturday";
+
+export interface OperatingHoursDayConfig {
+  enabled: boolean;
+  start: string;
+  end: string;
+}
+
 export interface AvailabilityConfig {
   services: Record<string, AvailabilityServiceConfig>;
+  operatingHours: Record<OperatingDayKey, OperatingHoursDayConfig>;
 }
+
+export const OPERATING_DAYS: Array<{
+  key: OperatingDayKey;
+  label: string;
+}> = [
+  { key: "monday", label: "Monday" },
+  { key: "tuesday", label: "Tuesday" },
+  { key: "wednesday", label: "Wednesday" },
+  { key: "thursday", label: "Thursday" },
+  { key: "friday", label: "Friday" },
+  { key: "saturday", label: "Saturday" },
+  { key: "sunday", label: "Sunday" },
+];
+
+const DAY_INDEX_TO_KEY: OperatingDayKey[] = [
+  "sunday",
+  "monday",
+  "tuesday",
+  "wednesday",
+  "thursday",
+  "friday",
+  "saturday",
+];
+
+const DEFAULT_OPERATING_HOURS: Record<
+  OperatingDayKey,
+  OperatingHoursDayConfig
+> = {
+  sunday: { enabled: false, start: "09:00", end: "13:30" },
+  monday: { enabled: true, start: "08:30", end: "16:30" },
+  tuesday: { enabled: true, start: "08:30", end: "16:30" },
+  wednesday: { enabled: true, start: "08:30", end: "16:30" },
+  thursday: { enabled: true, start: "08:30", end: "16:30" },
+  friday: { enabled: true, start: "08:30", end: "16:30" },
+  saturday: { enabled: true, start: "09:00", end: "13:30" },
+};
 
 export const SERVICE_CATALOG: ServiceCatalogItem[] = [
   {
@@ -74,22 +126,126 @@ export const DEFAULT_AVAILABILITY_CONFIG: AvailabilityConfig = {
       },
     ]),
   ),
+  operatingHours: DEFAULT_OPERATING_HOURS,
 };
 
 const cloneDefaultConfig = (): AvailabilityConfig =>
   JSON.parse(JSON.stringify(DEFAULT_AVAILABILITY_CONFIG));
+const normalizeTimeValue = (value: unknown, fallback: string) => {
+  if (typeof value !== "string") {
+    return fallback;
+  }
+
+  const match = value.match(/^(\d{2}):(\d{2})/);
+  if (!match) {
+    return fallback;
+  }
+
+  return `${match[1]}:${match[2]}`;
+};
+
+export const timeStringToMinutes = (value: string) => {
+  const normalized = normalizeTimeValue(value, "");
+  if (!normalized) {
+    return null;
+  }
+
+  const [hours, minutes] = normalized.split(":").map(Number);
+
+  if (
+    Number.isNaN(hours) ||
+    Number.isNaN(minutes) ||
+    hours < 0 ||
+    hours > 23 ||
+    minutes < 0 ||
+    minutes > 59
+  ) {
+    return null;
+  }
+
+  return hours * 60 + minutes;
+};
+
+export const isOperatingHoursRangeValid = (
+  start: string,
+  end: string,
+  slotDurationMinutes = 30,
+) => {
+  const startMinutes = timeStringToMinutes(start);
+  const endMinutes = timeStringToMinutes(end);
+
+  if (startMinutes === null || endMinutes === null) {
+    return false;
+  }
+
+  return endMinutes - startMinutes >= slotDurationMinutes;
+};
+
+export const getOperatingDayKey = (date: Date): OperatingDayKey =>
+  DAY_INDEX_TO_KEY[date.getDay()];
+
+export const getOperatingHoursForDate = (
+  config: AvailabilityConfig,
+  date: Date,
+) => config.operatingHours[getOperatingDayKey(date)];
+
+export const getAvailableTimeSlots = (
+  config: AvailabilityConfig,
+  date: Date,
+  slotDurationMinutes = 30,
+) => {
+  const dayConfig = getOperatingHoursForDate(config, date);
+
+  if (
+    !dayConfig?.enabled ||
+    !isOperatingHoursRangeValid(
+      dayConfig.start,
+      dayConfig.end,
+      slotDurationMinutes,
+    )
+  ) {
+    return [];
+  }
+
+  const startMinutes = timeStringToMinutes(dayConfig.start);
+  const endMinutes = timeStringToMinutes(dayConfig.end);
+
+  if (startMinutes === null || endMinutes === null) {
+    return [];
+  }
+
+  const slots: string[] = [];
+
+  for (
+    let current = startMinutes;
+    current + slotDurationMinutes <= endMinutes;
+    current += slotDurationMinutes
+  ) {
+    const hours = String(Math.floor(current / 60)).padStart(2, "0");
+    const minutes = String(current % 60).padStart(2, "0");
+    slots.push(`${hours}:${minutes}`);
+  }
+
+  return slots;
+};
+
+export const isDateBookable = (config: AvailabilityConfig, date: Date) =>
+  getAvailableTimeSlots(config, date).length > 0;
+
+export const isTimeWithinOperatingHours = (
+  config: AvailabilityConfig,
+  date: Date,
+  time: string,
+  slotDurationMinutes = 30,
+) => getAvailableTimeSlots(config, date, slotDurationMinutes).includes(time);
 
 export const normalizeAvailabilityConfig = (
   config?: Partial<AvailabilityConfig> | null,
 ): AvailabilityConfig => {
   const normalized = cloneDefaultConfig();
 
-  if (!config?.services) {
-    return normalized;
-  }
-
   for (const service of SERVICE_CATALOG) {
-    const serviceConfig = config.services[service.id];
+    const serviceConfig = config?.services?.[service.id];
 
     if (serviceConfig && typeof serviceConfig.enabled === "boolean") {
       normalized.services[service.id].enabled = serviceConfig.enabled;
@@ -102,6 +258,21 @@ export const normalizeAvailabilityConfig = (
           enabled;
       }
     }
+  }
+
+  for (const day of OPERATING_DAYS) {
+    const incomingDay = config?.operatingHours?.[day.key];
+    const normalizedDay = normalized.operatingHours[day.key];
+
+    if (typeof incomingDay?.enabled === "boolean") {
+      normalizedDay.enabled = incomingDay.enabled;
+    }
+
+    normalizedDay.start = normalizeTimeValue(
+      incomingDay?.start,
+      normalizedDay.start,
+    );
+    normalizedDay.end = normalizeTimeValue(incomingDay?.end, normalizedDay.end);
   }
 
   return normalized;

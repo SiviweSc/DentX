@@ -28,8 +28,11 @@ import { toast } from "sonner";
 import {
   DEFAULT_AVAILABILITY_CONFIG,
   fetchAvailabilityConfig,
+  getAvailableTimeSlots,
+  isDateBookable,
   isPractitionerEnabled,
   isServiceEnabled,
+  isTimeWithinOperatingHours,
   SERVICE_CATALOG,
 } from "../lib/availability";
 
@@ -79,25 +82,6 @@ interface CreateBookingForm {
   medicalAid: string;
   medicalAidNumber: string;
 }
-
-const CALENDAR_TIME_SLOTS = [
-  "08:30",
-  "09:00",
-  "09:30",
-  "10:00",
-  "10:30",
-  "11:00",
-  "11:30",
-  "12:00",
-  "12:30",
-  "13:00",
-  "13:30",
-  "14:00",
-  "14:30",
-  "15:00",
-  "15:30",
-  "16:00",
-];
 
 const INITIAL_CREATE_FORM: CreateBookingForm = {
   serviceType: "",
@@ -188,6 +172,18 @@ export function BookingCalendar({ onClose: _onClose }: BookingCalendarProps) {
       practitioner.id,
     ),
   );
+  const createBookingDateObject = createBookingForm.date
+    ? new Date(`${createBookingForm.date}T12:00:00`)
+    : null;
+  const createBookingAvailableSlots = createBookingDateObject
+    ? getAvailableTimeSlots(availabilityConfig, createBookingDateObject)
+    : [];
+  const rescheduleDateObject = rescheduleDate
+    ? new Date(`${rescheduleDate}T12:00:00`)
+    : null;
+  const rescheduleAvailableSlots = rescheduleDateObject
+    ? getAvailableTimeSlots(availabilityConfig, rescheduleDateObject)
+    : [];
 
   useEffect(() => {
     fetchBookings();
@@ -258,10 +254,15 @@ export function BookingCalendar({ onClose: _onClose }: BookingCalendarProps) {
   };
 
   const openCreateDialog = (dateValue: string, timeValue: string) => {
+    const bookingDate = new Date(`${dateValue}T12:00:00`);
+    const allowedSlots = getAvailableTimeSlots(availabilityConfig, bookingDate);
+
     setCreateBookingForm({
       ...INITIAL_CREATE_FORM,
       date: dateValue,
-      time: timeValue,
+      time: allowedSlots.includes(timeValue)
+        ? timeValue
+        : (allowedSlots[0] ?? ""),
     });
     setShowCreateDialog(true);
   };
@@ -280,16 +281,15 @@ export function BookingCalendar({ onClose: _onClose }: BookingCalendarProps) {
   };
 
   const handleSelectSlot = ({ start }: { start: Date }) => {
-    const dayOfWeek = start.getDay();
     const slotDate = toLocalDateString(start);
     const slotTime = format(start, "HH:mm");
 
-    if (dayOfWeek === 0) {
-      toast.error("Sunday is closed");
+    if (!isDateBookable(availabilityConfig, start)) {
+      toast.error("This day is closed for bookings");
       return;
     }
 
-    if (!CALENDAR_TIME_SLOTS.includes(slotTime)) {
+    if (!isTimeWithinOperatingHours(availabilityConfig, start, slotTime)) {
       toast.error("Please select one of the 30-minute booking slots");
       return;
     }
@@ -313,6 +313,20 @@ export function BookingCalendar({ onClose: _onClose }: BookingCalendarProps) {
     field: keyof CreateBookingForm,
     value: string,
   ) => {
+    if (field === "date") {
+      const nextDateObject = value ? new Date(`${value}T12:00:00`) : null;
+      const nextSlots = nextDateObject
+        ? getAvailableTimeSlots(availabilityConfig, nextDateObject)
+        : [];
+
+      setCreateBookingForm((prev) => ({
+        ...prev,
+        date: value,
+        time: nextSlots.includes(prev.time) ? prev.time : (nextSlots[0] ?? ""),
+      }));
+      return;
+    }
+
     setCreateBookingForm((prev) => ({
       ...prev,
       [field]: value,
@@ -347,6 +361,25 @@ export function BookingCalendar({ onClose: _onClose }: BookingCalendarProps) {
       )
     ) {
       toast.error("That practitioner is currently unavailable");
+      return;
+    }
+
+    if (
+      !createBookingDateObject ||
+      !isDateBookable(availabilityConfig, createBookingDateObject)
+    ) {
+      toast.error("That day is closed for bookings");
+      return;
+    }
+
+    if (
+      !isTimeWithinOperatingHours(
+        availabilityConfig,
+        createBookingDateObject,
+        createBookingForm.time,
+      )
+    ) {
+      toast.error("That time is outside operating hours");
       return;
     }
 
@@ -413,6 +446,20 @@ export function BookingCalendar({ onClose: _onClose }: BookingCalendarProps) {
   const handleRescheduleSubmit = async () => {
     if (!selectedBooking || !rescheduleDate || !rescheduleTime) {
       toast.error("Please select both date and time");
+      return;
+    }
+
+    const nextDate = new Date(`${rescheduleDate}T12:00:00`);
+
+    if (!isDateBookable(availabilityConfig, nextDate)) {
+      toast.error("That day is closed for bookings");
+      return;
+    }
+
+    if (
+      !isTimeWithinOperatingHours(availabilityConfig, nextDate, rescheduleTime)
+    ) {
+      toast.error("That time is outside operating hours");
       return;
     }
 
@@ -546,13 +593,24 @@ export function BookingCalendar({ onClose: _onClose }: BookingCalendarProps) {
   };
 
   const weekStart = startOfWeek(currentDate, { weekStartsOn: 1 });
+  const enabledHours = Object.values(availabilityConfig.operatingHours).filter(
+    (day) => day.enabled,
+  );
+  const earliestOpen =
+    enabledHours
+      .map((day) => day.start)
+      .sort((left, right) => left.localeCompare(right))[0] || "08:30";
+  const latestClose =
+    enabledHours
+      .map((day) => day.end)
+      .sort((left, right) => right.localeCompare(left))[0] || "16:30";
   const calendarMinTime = combineDateAndTime(
     toLocalDateString(weekStart),
-    "08:30",
+    earliestOpen,
   );
   const calendarMaxTime = combineDateAndTime(
     toLocalDateString(weekStart),
-    "16:30",
+    latestClose,
   );
 
   if (loading) {
@@ -624,7 +682,7 @@ export function BookingCalendar({ onClose: _onClose }: BookingCalendarProps) {
             onClick={() =>
               openCreateDialog(
                 toLocalDateString(new Date()),
-                CALENDAR_TIME_SLOTS[0],
+                getAvailableTimeSlots(availabilityConfig, new Date())[0] || "",
               )
             }
           >
@@ -735,12 +793,18 @@ export function BookingCalendar({ onClose: _onClose }: BookingCalendarProps) {
                   className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#9A7B1D]"
                 >
                   <option value="">Select time</option>
-                  {CALENDAR_TIME_SLOTS.map((slot) => (
+                  {createBookingAvailableSlots.map((slot) => (
                     <option key={slot} value={slot}>
                       {slot}
                     </option>
                   ))}
                 </select>
+                {createBookingDateObject &&
+                  createBookingAvailableSlots.length === 0 && (
+                    <p className="mt-2 text-xs text-amber-700">
+                      This date is closed for bookings. Choose another date.
+                    </p>
+                  )}
               </div>
             </div>
 
@@ -1093,12 +1157,18 @@ export function BookingCalendar({ onClose: _onClose }: BookingCalendarProps) {
                       className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-[#9A7B1D]"
                     >
                       <option value="">Select time</option>
-                      {CALENDAR_TIME_SLOTS.map((t) => (
+                      {rescheduleAvailableSlots.map((t) => (
                         <option key={t} value={t}>
                           {t}
                         </option>
                       ))}
                     </select>
+                    {rescheduleDateObject &&
+                      rescheduleAvailableSlots.length === 0 && (
+                        <p className="mt-2 text-xs text-amber-700">
+                          This date is closed for bookings. Choose another date.
+                        </p>
+                      )}
                   </div>
                   <div className="flex gap-2">
                     <Button

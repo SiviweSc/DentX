@@ -23,8 +23,12 @@ import { supabaseAdminApiBaseUrls } from "../../../utils/supabase/client";
 import {
   DEFAULT_AVAILABILITY_CONFIG,
   fetchAvailabilityConfig,
+  getAvailableTimeSlots,
+  getOperatingHoursForDate,
+  isDateBookable,
   isPractitionerEnabled,
   isServiceEnabled,
+  isTimeWithinOperatingHours,
 } from "../lib/availability";
 import logo from "../../assets/cadae8615ee9587c8f09fa141332814475e43e29.png";
 
@@ -188,25 +192,6 @@ const PRACTITIONERS = {
   ],
 };
 
-const TIME_SLOTS = [
-  "08:30",
-  "09:00",
-  "09:30",
-  "10:00",
-  "10:30",
-  "11:00",
-  "11:30",
-  "12:00",
-  "12:30",
-  "13:00",
-  "13:30",
-  "14:00",
-  "14:30",
-  "15:00",
-  "15:30",
-  "16:00",
-];
-
 export function BookingFormNew({ onClose }: BookingFormNewProps) {
   const [step, setStep] = useState(1);
   const [bookedSlots, setBookedSlots] = useState<string[]>([]);
@@ -267,11 +252,30 @@ export function BookingFormNew({ onClose }: BookingFormNewProps) {
 
   const isSelectedTimeUnavailable =
     !!formData.time &&
-    (bookedSlots.includes(formData.time) ||
+    (!(
+      formData.date &&
+      isTimeWithinOperatingHours(
+        availabilityConfig,
+        formData.date,
+        formData.time,
+      )
+    ) ||
+      bookedSlots.includes(formData.time) ||
       isPastTimeSlot(formData.time, formData.date));
 
+  const availableTimeSlots = formData.date
+    ? getAvailableTimeSlots(availabilityConfig, formData.date)
+    : [];
+
+  const selectedDayHours = formData.date
+    ? getOperatingHoursForDate(availabilityConfig, formData.date)
+    : null;
+
   const canContinueStep3 =
-    !!formData.date && !!formData.time && !isSelectedTimeUnavailable;
+    !!formData.date &&
+    !!formData.time &&
+    availableTimeSlots.includes(formData.time) &&
+    !isSelectedTimeUnavailable;
 
   const toLocalDateString = (date: Date) => {
     const year = date.getFullYear();
@@ -337,6 +341,33 @@ export function BookingFormNew({ onClose }: BookingFormNewProps) {
       }));
     }
   }, [availabilityConfig, formData.practitionerType, formData.serviceType]);
+
+  useEffect(() => {
+    if (!formData.date) {
+      return;
+    }
+
+    if (!isDateBookable(availabilityConfig, formData.date)) {
+      setFormData((prev) => ({
+        ...prev,
+        date: undefined,
+        time: "",
+      }));
+      return;
+    }
+
+    const nextAvailableSlots = getAvailableTimeSlots(
+      availabilityConfig,
+      formData.date,
+    );
+
+    if (formData.time && !nextAvailableSlots.includes(formData.time)) {
+      setFormData((prev) => ({
+        ...prev,
+        time: "",
+      }));
+    }
+  }, [availabilityConfig, formData.date, formData.time]);
 
   // Fetch booked slots when date changes
   useEffect(() => {
@@ -445,6 +476,24 @@ export function BookingFormNew({ onClose }: BookingFormNewProps) {
       ) {
         toast.error("That practitioner is currently unavailable");
         setStep(2);
+        return;
+      }
+
+      if (!formData.date) {
+        toast.error("Please choose an appointment date");
+        setStep(3);
+        return;
+      }
+
+      if (
+        !isTimeWithinOperatingHours(
+          availabilityConfig,
+          formData.date,
+          formData.time,
+        )
+      ) {
+        toast.error("That time is outside operating hours");
+        setStep(3);
         return;
       }
 
@@ -841,7 +890,8 @@ This is an automated appointment request from dentxquarters.co.za`;
                         selected={formData.date}
                         onSelect={handleDateSelect}
                         disabled={(date) =>
-                          date < getStartOfToday() || date.getDay() === 0
+                          date < getStartOfToday() ||
+                          !isDateBookable(availabilityConfig, date)
                         }
                         className="rounded-lg"
                       />
@@ -853,6 +903,13 @@ This is an automated appointment request from dentxquarters.co.za`;
                     <Label className="mb-4 block text-lg text-gray-700">
                       Select Time
                     </Label>
+                    {formData.date && selectedDayHours && (
+                      <p className="text-sm text-gray-500 mb-2">
+                        {selectedDayHours.enabled
+                          ? `Booking hours: ${selectedDayHours.start} - ${selectedDayHours.end}`
+                          : "This day is closed"}
+                      </p>
+                    )}
                     {bookedSlots.length > 0 && (
                       <p className="text-sm text-gray-500 mb-2">
                         {bookedSlots.length} slot(s) already booked for this
@@ -860,7 +917,8 @@ This is an automated appointment request from dentxquarters.co.za`;
                       </p>
                     )}
                     {formData.date &&
-                      TIME_SLOTS.every((time) => {
+                      availableTimeSlots.length > 0 &&
+                      availableTimeSlots.every((time) => {
                         const isBooked = bookedSlots.includes(time);
                         const isPast = isPastTimeSlot(time, formData.date);
                         return isBooked || isPast;
@@ -869,8 +927,14 @@ This is an automated appointment request from dentxquarters.co.za`;
                           No remaining slots today. Please choose another date.
                         </p>
                       )}
+                    {formData.date && availableTimeSlots.length === 0 && (
+                      <p className="text-sm text-amber-700 mb-2">
+                        This day is closed for online bookings. Please choose
+                        another date.
+                      </p>
+                    )}
                     <div className="grid grid-cols-3 gap-3 max-h-[350px] overflow-y-auto pr-2">
-                      {TIME_SLOTS.map((time) => {
+                      {availableTimeSlots.map((time) => {
                         const isBooked = bookedSlots.includes(time);
                         const isPast = isPastTimeSlot(time, formData.date);
                         const isUnavailable = isBooked || isPast;
