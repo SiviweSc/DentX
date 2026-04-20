@@ -212,6 +212,97 @@ const isTimeWithinOperatingHours = (config: any, date: Date, time: string) => {
   );
 };
 
+const normalizePhoneValue = (value: string) =>
+  String(value || "")
+    .replace(/\s+/g, "")
+    .replace(/[^\d+]/g, "");
+
+const normalizeTextValue = (value: string) =>
+  String(value || "")
+    .trim()
+    .toLowerCase();
+
+const ensurePatientExistsForBooking = async (supabase: any, booking: any) => {
+  const bookingIdNumber = String(booking.id_number || "").trim();
+  let existingPatient: { id: string } | null = null;
+
+  if (bookingIdNumber) {
+    const { data: idMatch, error: idError } = await supabase
+      .from("patients")
+      .select("id")
+      .eq("id_number", bookingIdNumber)
+      .maybeSingle();
+
+    if (idError) {
+      console.error("Failed to check patient by ID number:", idError);
+    }
+
+    if (idMatch) {
+      existingPatient = idMatch;
+    }
+  }
+
+  if (!existingPatient) {
+    const bookingPhone = normalizePhoneValue(booking.phone || "");
+    const bookingFirstName = normalizeTextValue(booking.first_name || "");
+    const bookingLastName = normalizeTextValue(booking.last_name || "");
+
+    const { data: samePhonePatients, error: phoneError } = await supabase
+      .from("patients")
+      .select("id, first_name, last_name, phone")
+      .eq("phone", booking.phone || "");
+
+    if (phoneError) {
+      console.error("Failed to check patient by phone:", phoneError);
+    }
+
+    const matchedByNameAndPhone = (samePhonePatients || []).find(
+      (patient: any) =>
+        normalizePhoneValue(patient.phone || "") === bookingPhone &&
+        normalizeTextValue(patient.first_name || "") === bookingFirstName &&
+        normalizeTextValue(patient.last_name || "") === bookingLastName,
+    );
+
+    if (matchedByNameAndPhone) {
+      existingPatient = { id: matchedByNameAndPhone.id };
+    }
+  }
+
+  if (!existingPatient) {
+    const { error: insertError } = await supabase.from("patients").insert({
+      first_name: booking.first_name,
+      last_name: booking.last_name,
+      email: booking.email || null,
+      phone: booking.phone,
+      id_number: booking.id_number || null,
+      medical_aid: booking.medical_aid || null,
+      medical_aid_number: booking.medical_aid_number || null,
+      last_visit: new Date().toISOString(),
+    });
+
+    if (insertError) {
+      throw insertError;
+    }
+
+    return;
+  }
+
+  const { error: updateError } = await supabase
+    .from("patients")
+    .update({
+      email: booking.email || null,
+      medical_aid: booking.medical_aid || null,
+      medical_aid_number: booking.medical_aid_number || null,
+      last_visit: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", existingPatient.id);
+
+  if (updateError) {
+    throw updateError;
+  }
+};
+
 const normalizeAvailabilityConfig = (config: any) => {
   const normalized = JSON.parse(JSON.stringify(DEFAULT_AVAILABILITY_CONFIG));
 
@@ -654,6 +745,17 @@ app.put("/make-server-34100c2d/bookings/:id", requireAuth, async (c) => {
         return c.json({ error: "Booking not found" }, 404);
       }
       throw error;
+    }
+
+    if (updates.status === "confirmed" && booking) {
+      try {
+        await ensurePatientExistsForBooking(supabase, booking);
+      } catch (patientSyncError) {
+        console.error(
+          "Failed to sync patient after booking confirmation:",
+          patientSyncError,
+        );
+      }
     }
 
     // Log activity

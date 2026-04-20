@@ -1,8 +1,9 @@
-import { useState, useEffect } from "react";
+﻿import { useState, useEffect } from "react";
 import { Button } from "./ui/button";
 import { Badge } from "./ui/badge";
 import { Switch } from "./ui/switch";
 import { Card, CardContent, CardHeader, CardTitle } from "./ui/card";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "./ui/tabs";
 import {
   Dialog,
   DialogContent,
@@ -32,6 +33,11 @@ import {
   Eye,
   Menu,
   ChevronLeft,
+  Upload,
+  FileText,
+  Image as ImageIcon,
+  Trash2,
+  Pencil,
 } from "lucide-react";
 import { supabase } from "../../../utils/supabase/client";
 import { format } from "date-fns";
@@ -191,16 +197,10 @@ function AvailabilitySettingsPanel({ authToken }: { authToken: string }) {
     key: string,
   ) => {
     try {
-      setSavingKey(key);
       const savedConfig = await updateAvailabilityConfig(nextConfig, authToken);
       setAvailabilityConfig(savedConfig);
-      toast.success("Availability updated");
-    } catch (error) {
-      console.error("Failed to update availability:", error);
-      toast.error("Failed to update availability");
       setAvailabilityConfig(await fetchAvailabilityConfig());
     } finally {
-      setSavingKey(null);
     }
   };
 
@@ -960,7 +960,6 @@ function BookingsContent() {
     newDateTime?: { date: string; time: string },
   ) => {
     try {
-      // Send TO the customer's phone number
       const customerPhone = booking.phone
         .replace(/\s+/g, "")
         .replace(/^0/, "27");
@@ -990,48 +989,91 @@ function BookingsContent() {
 
   const handleConfirm = async (booking: any) => {
     try {
-      console.log("Starting handleConfirm for:", booking.phone);
+      const normalizePhone = (value: string) =>
+        String(value || "")
+          .replace(/\s+/g, "")
+          .replace(/[^\d+]/g, "");
+      const normalizeText = (value: string) =>
+        String(value || "")
+          .trim()
+          .toLowerCase();
 
-      // Check if patient already exists
-      const { data: existingPatient } = await supabase
-        .from("patients")
-        .select("id")
-        .eq("phone", booking.phone)
-        .single();
+      let existingPatient: { id: string } | null = null;
+      const bookingIdNumber = String(booking.id_number || "").trim();
 
-      console.log("Existing patient:", existingPatient);
-
-      // If patient doesn't exist, create new patient with "pending KYC" status
-      if (!existingPatient) {
-        console.log("Creating new patient...");
-        const { data: newPatient, error: patientError } = await supabase
+      if (bookingIdNumber) {
+        const { data: idMatch, error: idError } = await supabase
           .from("patients")
-          .insert({
-            first_name: booking.first_name,
-            last_name: booking.last_name,
-            phone: booking.phone,
-            email: booking.email || null,
-            medical_aid: booking.medical_aid || null,
-            medical_aid_number: booking.medical_aid_number || null,
-            kyc_status: "pending",
-            source: "website_booking",
-          })
-          .select();
+          .select("id")
+          .eq("id_number", bookingIdNumber)
+          .maybeSingle();
+
+        if (idError) {
+          console.error("Error checking patient by ID number:", idError);
+        }
+
+        if (idMatch) {
+          existingPatient = idMatch;
+        }
+      }
+
+      if (!existingPatient) {
+        const bookingPhone = normalizePhone(booking.phone || "");
+        const bookingFirstName = normalizeText(booking.first_name || "");
+        const bookingLastName = normalizeText(booking.last_name || "");
+
+        const { data: samePhonePatients, error: phoneError } = await supabase
+          .from("patients")
+          .select("id, first_name, last_name, phone")
+          .eq("phone", booking.phone || "");
+
+        if (phoneError) {
+          console.error("Error checking patient by phone:", phoneError);
+        }
+
+        const matchedByNameAndPhone = (samePhonePatients || []).find(
+          (patient: any) =>
+            normalizePhone(patient.phone || "") === bookingPhone &&
+            normalizeText(patient.first_name || "") === bookingFirstName &&
+            normalizeText(patient.last_name || "") === bookingLastName,
+        );
+
+        if (matchedByNameAndPhone) {
+          existingPatient = { id: matchedByNameAndPhone.id };
+        }
+      }
+
+      if (!existingPatient) {
+        const { error: patientError } = await supabase.from("patients").insert({
+          first_name: booking.first_name,
+          last_name: booking.last_name,
+          phone: booking.phone,
+          email: booking.email || null,
+          id_number: booking.id_number || null,
+          medical_aid: booking.medical_aid || null,
+          medical_aid_number: booking.medical_aid_number || null,
+          last_visit: new Date().toISOString(),
+        });
 
         if (patientError) {
           console.error("Error creating patient:", patientError);
-          toast.error("Failed to create patient record");
-          // Don't continue if patient creation fails
-          return;
+          toast.error("Booking confirmed, but failed to add patient record");
         } else {
-          console.log("Patient created successfully:", newPatient);
-          toast.success("New patient added with pending KYC status");
+          toast.success("New patient was added automatically");
         }
       } else {
-        console.log("Patient already exists, skipping creation");
+        await supabase
+          .from("patients")
+          .update({
+            last_visit: new Date().toISOString(),
+            email: booking.email || null,
+            medical_aid: booking.medical_aid || null,
+            medical_aid_number: booking.medical_aid_number || null,
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", existingPatient.id);
       }
 
-      // Update booking status to confirmed
       const { error: updateError } = await supabase
         .from("bookings")
         .update({ status: "confirmed" })
@@ -1043,13 +1085,8 @@ function BookingsContent() {
         return;
       }
 
-      console.log("Booking confirmed successfully");
       toast.success("Booking confirmed successfully!");
-
-      // Send WhatsApp notification to CUSTOMER
       await sendWhatsAppNotification(booking, "confirmed");
-
-      // Refresh bookings
       fetchBookings();
     } catch (err) {
       toast.error("An error occurred");
@@ -1524,44 +1561,114 @@ function BookingsContent() {
 }
 
 function PatientsContent() {
+  const EMPTY_PATIENT_FORM = {
+    first_name: "",
+    last_name: "",
+    id_number: "",
+    phone: "",
+    email: "",
+    medical_aid: "",
+    medical_aid_number: "",
+    date_of_birth: "",
+    address: "",
+    emergency_contact_name: "",
+    emergency_contact_phone: "",
+    notes: "",
+    last_visit: "",
+  };
+
+  const EMPTY_MEDICAL_FORM = {
+    blood_type: "",
+    allergies: "",
+    chronic_conditions: "",
+    current_medications: "",
+    primary_physician: "",
+    family_history: "",
+    insurance_notes: "",
+  };
+
+  const DOCUMENT_CATEGORY_OPTIONS = [
+    { value: "medical-record", label: "Medical Record" },
+    { value: "x-ray", label: "X-Ray" },
+    { value: "dr-note", label: "Dr Note" },
+    { value: "lab-result", label: "Lab Result" },
+    { value: "prescription", label: "Prescription" },
+    { value: "consent-form", label: "Consent Form" },
+    { value: "referral", label: "Referral" },
+    { value: "invoice", label: "Invoice" },
+    { value: "other", label: "Other" },
+  ];
+
   const [patients, setPatients] = useState<any[]>([]);
   const [patientSearch, setPatientSearch] = useState("");
   const [showAddPatientDialog, setShowAddPatientDialog] = useState(false);
   const [showPatientDetailsDialog, setShowPatientDetailsDialog] =
     useState(false);
   const [savingPatient, setSavingPatient] = useState(false);
+  const [savingMedicalProfile, setSavingMedicalProfile] = useState(false);
+  const [savingClinicalNote, setSavingClinicalNote] = useState(false);
+  const [uploadingDocument, setUploadingDocument] = useState(false);
+  const [loadingPatientData, setLoadingPatientData] = useState(false);
   const [selectedPatient, setSelectedPatient] = useState<any>(null);
-  const [patientForm, setPatientForm] = useState({
-    first_name: "",
-    last_name: "",
-    id_number: "",
-    phone: "",
-    email: "",
-    medical_aid: "",
-    medical_aid_number: "",
-    date_of_birth: "",
-    address: "",
-    emergency_contact_name: "",
-    emergency_contact_phone: "",
-    notes: "",
-    last_visit: "",
+  const [patientNotes, setPatientNotes] = useState<any[]>([]);
+  const [patientDocuments, setPatientDocuments] = useState<any[]>([]);
+  const [patientForm, setPatientForm] = useState(EMPTY_PATIENT_FORM);
+  const [newPatientForm, setNewPatientForm] = useState(EMPTY_PATIENT_FORM);
+  const [medicalForm, setMedicalForm] = useState(EMPTY_MEDICAL_FORM);
+  const [noteForm, setNoteForm] = useState({
+    id: "",
+    title: "",
+    content: "",
   });
-  const [newPatientForm, setNewPatientForm] = useState({
-    first_name: "",
-    last_name: "",
-    id_number: "",
-    phone: "",
-    email: "",
-    medical_aid: "",
-    medical_aid_number: "",
-    date_of_birth: "",
-    address: "",
-    emergency_contact_name: "",
-    emergency_contact_phone: "",
-    notes: "",
-    last_visit: "",
+  const [documentForm, setDocumentForm] = useState<{
+    category: string;
+    title: string;
+    file: File | null;
+  }>({
+    category: "medical-record",
+    title: "",
+    file: null,
   });
   const [loading, setLoading] = useState(true);
+
+  const getDocumentCategoryLabel = (category: string) =>
+    DOCUMENT_CATEGORY_OPTIONS.find((option) => option.value === category)
+      ?.label || "Other";
+
+  const getDocumentFolderName = (category: string) => {
+    const folderMap: Record<string, string> = {
+      "medical-record": "medical-records",
+      "x-ray": "x-rays",
+      "dr-note": "notes",
+      "lab-result": "lab-results",
+      prescription: "prescriptions",
+      "consent-form": "consent-forms",
+      referral: "referrals",
+      invoice: "invoices",
+      other: "other",
+    };
+
+    return folderMap[category] || "other";
+  };
+
+  const groupedPatientDocuments = patientDocuments.reduce(
+    (acc, document) => {
+      const category = document.category || "other";
+      const createdDate = document.created_at
+        ? new Date(document.created_at)
+        : new Date();
+      const year = String(createdDate.getFullYear());
+      const month = String(createdDate.getMonth() + 1).padStart(2, "0");
+
+      if (!acc[category]) acc[category] = {};
+      if (!acc[category][year]) acc[category][year] = {};
+      if (!acc[category][year][month]) acc[category][year][month] = [];
+
+      acc[category][year][month].push(document);
+      return acc;
+    },
+    {} as Record<string, Record<string, Record<string, any[]>>>,
+  );
 
   useEffect(() => {
     fetchPatients();
@@ -1582,6 +1689,58 @@ function PatientsContent() {
       console.error("Error fetching patients:", err);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const loadPatientRelatedData = async (patientId: string) => {
+    try {
+      setLoadingPatientData(true);
+
+      const [medicalResult, notesResult, documentsResult] = await Promise.all([
+        supabase
+          .from("patient_medical_details")
+          .select("*")
+          .eq("patient_id", patientId)
+          .maybeSingle(),
+        supabase
+          .from("patient_clinical_notes")
+          .select("*")
+          .eq("patient_id", patientId)
+          .order("created_at", { ascending: false }),
+        supabase
+          .from("patient_documents")
+          .select("*")
+          .eq("patient_id", patientId)
+          .order("created_at", { ascending: false }),
+      ]);
+
+      if (medicalResult.error) {
+        console.error("Failed to fetch medical details:", medicalResult.error);
+      }
+      if (notesResult.error) {
+        console.error("Failed to fetch clinical notes:", notesResult.error);
+      }
+      if (documentsResult.error) {
+        console.error("Failed to fetch documents:", documentsResult.error);
+      }
+
+      setMedicalForm({
+        blood_type: medicalResult.data?.blood_type || "",
+        allergies: medicalResult.data?.allergies || "",
+        chronic_conditions: medicalResult.data?.chronic_conditions || "",
+        current_medications: medicalResult.data?.current_medications || "",
+        primary_physician: medicalResult.data?.primary_physician || "",
+        family_history: medicalResult.data?.family_history || "",
+        insurance_notes: medicalResult.data?.insurance_notes || "",
+      });
+
+      setPatientNotes(notesResult.data || []);
+      setPatientDocuments(documentsResult.data || []);
+    } catch (error) {
+      console.error("Failed to load patient related data:", error);
+      toast.error("Failed to load patient records");
+    } finally {
+      setLoadingPatientData(false);
     }
   };
 
@@ -1619,7 +1778,7 @@ function PatientsContent() {
       .includes(search);
   });
 
-  const handlePatientRowClick = (patient: any) => {
+  const handlePatientRowClick = async (patient: any) => {
     setSelectedPatient(patient);
     setPatientForm({
       first_name: patient.first_name || "",
@@ -1636,7 +1795,10 @@ function PatientsContent() {
       notes: patient.notes || "",
       last_visit: toDateTimeLocalValue(patient.last_visit),
     });
+    setNoteForm({ id: "", title: "", content: "" });
+    setDocumentForm({ category: "medical-record", title: "", file: null });
     setShowPatientDetailsDialog(true);
+    await loadPatientRelatedData(patient.id);
   };
 
   const handleSavePatientChanges = async () => {
@@ -1693,14 +1855,250 @@ function PatientsContent() {
       }
 
       toast.success("Patient details updated successfully");
-      setShowPatientDetailsDialog(false);
-      setSelectedPatient(null);
-      fetchPatients();
+      await fetchPatients();
     } catch (err) {
       console.error("Error updating patient:", err);
       toast.error("Failed to update patient");
     } finally {
       setSavingPatient(false);
+    }
+  };
+
+  const handleSaveMedicalProfile = async () => {
+    if (!selectedPatient) return;
+
+    try {
+      setSavingMedicalProfile(true);
+
+      const { error } = await supabase.from("patient_medical_details").upsert(
+        {
+          patient_id: selectedPatient.id,
+          blood_type: medicalForm.blood_type.trim() || null,
+          allergies: medicalForm.allergies.trim() || null,
+          chronic_conditions: medicalForm.chronic_conditions.trim() || null,
+          current_medications: medicalForm.current_medications.trim() || null,
+          primary_physician: medicalForm.primary_physician.trim() || null,
+          family_history: medicalForm.family_history.trim() || null,
+          insurance_notes: medicalForm.insurance_notes.trim() || null,
+        },
+        { onConflict: "patient_id" },
+      );
+
+      if (error) {
+        console.error("Failed to save medical profile:", error);
+        toast.error("Failed to save medical profile");
+        return;
+      }
+
+      toast.success("Medical details saved");
+      await loadPatientRelatedData(selectedPatient.id);
+    } catch (error) {
+      console.error("Failed to save medical profile:", error);
+      toast.error("Failed to save medical profile");
+    } finally {
+      setSavingMedicalProfile(false);
+    }
+  };
+
+  const handleSaveClinicalNote = async () => {
+    if (!selectedPatient) return;
+    if (!noteForm.content.trim()) {
+      toast.error("Note content is required");
+      return;
+    }
+
+    try {
+      setSavingClinicalNote(true);
+
+      if (noteForm.id) {
+        const { error } = await supabase
+          .from("patient_clinical_notes")
+          .update({
+            title: noteForm.title.trim() || null,
+            content: noteForm.content.trim(),
+            author_name: "Admin",
+          })
+          .eq("id", noteForm.id);
+
+        if (error) {
+          console.error("Failed to update note:", error);
+          toast.error("Failed to update note");
+          return;
+        }
+
+        toast.success("Note updated");
+      } else {
+        const { error } = await supabase.from("patient_clinical_notes").insert({
+          patient_id: selectedPatient.id,
+          title: noteForm.title.trim() || null,
+          content: noteForm.content.trim(),
+          author_name: "Admin",
+        });
+
+        if (error) {
+          console.error("Failed to add note:", error);
+          toast.error("Failed to add note");
+          return;
+        }
+
+        toast.success("Note added");
+      }
+
+      setNoteForm({ id: "", title: "", content: "" });
+      await loadPatientRelatedData(selectedPatient.id);
+    } catch (error) {
+      console.error("Failed to save note:", error);
+      toast.error("Failed to save note");
+    } finally {
+      setSavingClinicalNote(false);
+    }
+  };
+
+  const handleDeleteClinicalNote = async (noteId: string) => {
+    if (!selectedPatient) return;
+
+    try {
+      const { error } = await supabase
+        .from("patient_clinical_notes")
+        .delete()
+        .eq("id", noteId);
+
+      if (error) {
+        console.error("Failed to delete note:", error);
+        toast.error("Failed to delete note");
+        return;
+      }
+
+      toast.success("Note deleted");
+      await loadPatientRelatedData(selectedPatient.id);
+    } catch (error) {
+      console.error("Failed to delete note:", error);
+      toast.error("Failed to delete note");
+    }
+  };
+
+  const handleOpenDocument = async (document: any) => {
+    try {
+      const { data, error } = await supabase.storage
+        .from("patient-files")
+        .createSignedUrl(document.file_path, 60);
+
+      if (error || !data?.signedUrl) {
+        console.error("Failed to open document:", error);
+        toast.error("Could not open file");
+        return;
+      }
+
+      window.open(data.signedUrl, "_blank", "noopener,noreferrer");
+    } catch (error) {
+      console.error("Failed to open document:", error);
+      toast.error("Could not open file");
+    }
+  };
+
+  const handleDeleteDocument = async (document: any) => {
+    if (!selectedPatient) return;
+
+    try {
+      const { error: storageError } = await supabase.storage
+        .from("patient-files")
+        .remove([document.file_path]);
+
+      if (storageError) {
+        console.error("Failed to remove file from storage:", storageError);
+      }
+
+      const { error } = await supabase
+        .from("patient_documents")
+        .delete()
+        .eq("id", document.id);
+
+      if (error) {
+        console.error("Failed to delete document:", error);
+        toast.error("Failed to delete document");
+        return;
+      }
+
+      toast.success("Document deleted");
+      await loadPatientRelatedData(selectedPatient.id);
+    } catch (error) {
+      console.error("Failed to delete document:", error);
+      toast.error("Failed to delete document");
+    }
+  };
+
+  const handleUploadDocument = async () => {
+    if (!selectedPatient) return;
+    if (!documentForm.file) {
+      toast.error("Please choose a file to upload");
+      return;
+    }
+    if (!documentForm.title.trim()) {
+      toast.error("Please provide a document title");
+      return;
+    }
+
+    try {
+      setUploadingDocument(true);
+
+      const now = new Date();
+      const year = String(now.getFullYear());
+      const month = String(now.getMonth() + 1).padStart(2, "0");
+      const folderName = getDocumentFolderName(documentForm.category);
+      const safeTitle = documentForm.title
+        .trim()
+        .toLowerCase()
+        .replace(/\s+/g, "-")
+        .replace(/[^a-z0-9-]/g, "")
+        .replace(/-+/g, "-")
+        .slice(0, 40);
+
+      const sanitizedName = documentForm.file.name
+        .replace(/\s+/g, "-")
+        .replace(/[^a-zA-Z0-9._-]/g, "")
+        .toLowerCase();
+      const filePath = `${selectedPatient.id}/${folderName}/${year}/${month}/${safeTitle || "document"}-${Date.now()}-${sanitizedName}`;
+
+      const { error: uploadError } = await supabase.storage
+        .from("patient-files")
+        .upload(filePath, documentForm.file, {
+          cacheControl: "3600",
+          upsert: false,
+        });
+
+      if (uploadError) {
+        console.error("File upload failed:", uploadError);
+        toast.error("File upload failed");
+        return;
+      }
+
+      const { error: insertError } = await supabase
+        .from("patient_documents")
+        .insert({
+          patient_id: selectedPatient.id,
+          category: documentForm.category,
+          title: documentForm.title.trim(),
+          file_name: documentForm.file.name,
+          file_path: filePath,
+          mime_type: documentForm.file.type || null,
+          size_bytes: documentForm.file.size,
+          uploaded_by: "Admin",
+        });
+
+      if (insertError) {
+        console.error("Failed to save document metadata:", insertError);
+        toast.error("Failed to save document metadata");
+        return;
+      }
+
+      toast.success("Document uploaded");
+      setDocumentForm({ category: "medical-record", title: "", file: null });
+      await loadPatientRelatedData(selectedPatient.id);
+    } catch (error) {
+      console.error("Failed to upload document:", error);
+      toast.error("Failed to upload document");
+    } finally {
+      setUploadingDocument(false);
     }
   };
 
@@ -1774,21 +2172,7 @@ function PatientsContent() {
 
       toast.success("Patient added successfully");
       setShowAddPatientDialog(false);
-      setNewPatientForm({
-        first_name: "",
-        last_name: "",
-        id_number: "",
-        phone: "",
-        email: "",
-        medical_aid: "",
-        medical_aid_number: "",
-        date_of_birth: "",
-        address: "",
-        emergency_contact_name: "",
-        emergency_contact_phone: "",
-        notes: "",
-        last_visit: "",
-      });
+      setNewPatientForm(EMPTY_PATIENT_FORM);
       fetchPatients();
     } catch (err) {
       console.error("Error adding patient:", err);
@@ -1937,21 +2321,7 @@ function PatientsContent() {
         onOpenChange={(open) => {
           setShowAddPatientDialog(open);
           if (!open) {
-            setNewPatientForm({
-              first_name: "",
-              last_name: "",
-              id_number: "",
-              phone: "",
-              email: "",
-              medical_aid: "",
-              medical_aid_number: "",
-              date_of_birth: "",
-              address: "",
-              emergency_contact_name: "",
-              emergency_contact_phone: "",
-              notes: "",
-              last_visit: "",
-            });
+            setNewPatientForm(EMPTY_PATIENT_FORM);
           }
         }}
       >
@@ -2151,200 +2521,815 @@ function PatientsContent() {
           setShowPatientDetailsDialog(open);
           if (!open) {
             setSelectedPatient(null);
+            setPatientNotes([]);
+            setPatientDocuments([]);
+            setMedicalForm(EMPTY_MEDICAL_FORM);
+            setNoteForm({ id: "", title: "", content: "" });
+            setDocumentForm({
+              category: "medical-record",
+              title: "",
+              file: null,
+            });
           }
         }}
       >
-        <DialogContent className="w-[calc(100vw-1rem)] sm:w-[92vw] max-w-2xl max-h-[90vh] overflow-y-auto overflow-x-hidden p-4 sm:p-6">
-          <DialogHeader>
-            <DialogTitle>Patient Details</DialogTitle>
-            <DialogDescription>
-              Update any patient field from the database schema.
-            </DialogDescription>
-          </DialogHeader>
-
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 [&>input]:min-w-0 [&>textarea]:min-w-0">
-            <input
-              type="text"
-              placeholder="First name"
-              value={patientForm.first_name}
-              onChange={(e) =>
-                setPatientForm((prev) => ({
-                  ...prev,
-                  first_name: e.target.value,
-                }))
-              }
-              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#9A7B1D]"
-            />
-            <input
-              type="text"
-              placeholder="Last name"
-              value={patientForm.last_name}
-              onChange={(e) =>
-                setPatientForm((prev) => ({
-                  ...prev,
-                  last_name: e.target.value,
-                }))
-              }
-              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#9A7B1D]"
-            />
-            <input
-              type="text"
-              placeholder="ID number"
-              value={patientForm.id_number}
-              onChange={(e) =>
-                setPatientForm((prev) => ({
-                  ...prev,
-                  id_number: e.target.value,
-                }))
-              }
-              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#9A7B1D]"
-            />
-            <input
-              type="text"
-              placeholder="Phone"
-              value={patientForm.phone}
-              onChange={(e) =>
-                setPatientForm((prev) => ({ ...prev, phone: e.target.value }))
-              }
-              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#9A7B1D]"
-            />
-            <input
-              type="email"
-              placeholder="Email"
-              value={patientForm.email}
-              onChange={(e) =>
-                setPatientForm((prev) => ({ ...prev, email: e.target.value }))
-              }
-              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#9A7B1D]"
-            />
-            <input
-              type="text"
-              placeholder="Medical aid"
-              value={patientForm.medical_aid}
-              onChange={(e) =>
-                setPatientForm((prev) => ({
-                  ...prev,
-                  medical_aid: e.target.value,
-                }))
-              }
-              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#9A7B1D]"
-            />
-            <input
-              type="text"
-              placeholder="Medical aid number"
-              value={patientForm.medical_aid_number}
-              onChange={(e) =>
-                setPatientForm((prev) => ({
-                  ...prev,
-                  medical_aid_number: e.target.value,
-                }))
-              }
-              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#9A7B1D]"
-            />
-          </div>
-
-          <div className="mt-3 grid grid-cols-1 lg:grid-cols-2 gap-3 [&>input]:min-w-0 [&>textarea]:min-w-0">
-            <input
-              type="date"
-              value={patientForm.date_of_birth}
-              onChange={(e) =>
-                setPatientForm((prev) => ({
-                  ...prev,
-                  date_of_birth: e.target.value,
-                }))
-              }
-              placeholder="Date of birth"
-              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#9A7B1D]"
-            />
-            <input
-              type="datetime-local"
-              value={patientForm.last_visit}
-              onChange={(e) =>
-                setPatientForm((prev) => ({
-                  ...prev,
-                  last_visit: e.target.value,
-                }))
-              }
-              placeholder="Last visit"
-              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#9A7B1D]"
-            />
-            <input
-              type="text"
-              placeholder="Emergency contact name"
-              value={patientForm.emergency_contact_name}
-              onChange={(e) =>
-                setPatientForm((prev) => ({
-                  ...prev,
-                  emergency_contact_name: e.target.value,
-                }))
-              }
-              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#9A7B1D]"
-            />
-            <input
-              type="text"
-              placeholder="Emergency contact phone"
-              value={patientForm.emergency_contact_phone}
-              onChange={(e) =>
-                setPatientForm((prev) => ({
-                  ...prev,
-                  emergency_contact_phone: e.target.value,
-                }))
-              }
-              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#9A7B1D]"
-            />
-            <textarea
-              placeholder="Address"
-              value={patientForm.address}
-              onChange={(e) =>
-                setPatientForm((prev) => ({
-                  ...prev,
-                  address: e.target.value,
-                }))
-              }
-              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#9A7B1D] md:col-span-2"
-              rows={2}
-            />
-            <textarea
-              placeholder="Notes"
-              value={patientForm.notes}
-              onChange={(e) =>
-                setPatientForm((prev) => ({ ...prev, notes: e.target.value }))
-              }
-              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#9A7B1D] md:col-span-2"
-              rows={3}
-            />
-          </div>
-
-          <div className="mt-2 text-xs text-gray-500 space-y-1">
-            {selectedPatient?.created_at && (
-              <p>
-                Added: {format(new Date(selectedPatient.created_at), "PPP p")}
-              </p>
-            )}
-            {selectedPatient?.updated_at && (
-              <p>
-                Updated: {format(new Date(selectedPatient.updated_at), "PPP p")}
-              </p>
-            )}
-          </div>
-
-          <DialogFooter>
-            <div className="mt-4 flex flex-col-reverse sm:flex-row gap-2 w-full sm:w-auto sm:justify-end">
-              <Button
-                variant="outline"
-                onClick={() => setShowPatientDetailsDialog(false)}
-              >
-                Close
-              </Button>
-              <Button
-                onClick={handleSavePatientChanges}
-                disabled={savingPatient}
-                className="bg-[#9A7B1D] hover:bg-[#7d6418] text-white"
-              >
-                {savingPatient ? "Saving..." : "Save Changes"}
-              </Button>
+        <DialogContent className="w-[calc(100vw-1rem)] sm:w-[96vw] max-w-4xl max-h-[92vh] flex flex-col p-0 gap-0 overflow-hidden">
+          {/* Header */}
+          <div className="flex items-start gap-3 px-6 pt-6 pb-4 border-b border-gray-100">
+            <div className="flex-shrink-0 w-10 h-10 rounded-full bg-[#9A7B1D]/10 flex items-center justify-center">
+              <User className="w-5 h-5 text-[#9A7B1D]" />
             </div>
-          </DialogFooter>
+            <div className="min-w-0">
+              <DialogTitle className="text-base font-semibold text-gray-900 leading-tight">
+                {selectedPatient
+                  ? `${selectedPatient.first_name ?? ""} ${selectedPatient.last_name ?? ""}`.trim() ||
+                    "Patient"
+                  : "Patient"}
+              </DialogTitle>
+              <DialogDescription>
+                <span className="text-xs text-gray-500 mt-0.5 block">
+                  {selectedPatient?.id_number
+                    ? `ID: ${selectedPatient.id_number}`
+                    : "Patient record"}
+                  {selectedPatient?.last_visit
+                    ? ` � Last visit: ${format(new Date(selectedPatient.last_visit), "d MMM yyyy")}`
+                    : ""}
+                </span>
+              </DialogDescription>
+            </div>
+            {loadingPatientData && (
+              <div className="ml-auto flex-shrink-0 text-xs text-gray-400 flex items-center gap-1">
+                <RefreshCw className="w-3 h-3 animate-spin" /> Loading...
+              </div>
+            )}
+          </div>
+          {/* Tabs */}
+          <Tabs defaultValue="profile" className="flex flex-col flex-1 min-h-0">
+            <TabsList className="flex-shrink-0 mx-6 mt-3 mb-0 bg-gray-100 rounded-lg h-9 w-auto self-start gap-0.5">
+              <TabsTrigger value="profile" className="text-xs px-3">
+                Profile
+              </TabsTrigger>
+              <TabsTrigger value="medical" className="text-xs px-3">
+                Medical
+              </TabsTrigger>
+              <TabsTrigger value="notes" className="text-xs px-3">
+                Dr Notes
+                {patientNotes.length > 0 && (
+                  <span className="ml-1.5 inline-flex items-center justify-center w-4 h-4 rounded-full bg-[#9A7B1D]/15 text-[#9A7B1D] text-[10px] font-semibold">
+                    {patientNotes.length}
+                  </span>
+                )}
+              </TabsTrigger>
+              <TabsTrigger value="documents" className="text-xs px-3">
+                Documents
+                {patientDocuments.length > 0 && (
+                  <span className="ml-1.5 inline-flex items-center justify-center w-4 h-4 rounded-full bg-[#9A7B1D]/15 text-[#9A7B1D] text-[10px] font-semibold">
+                    {patientDocuments.length}
+                  </span>
+                )}
+              </TabsTrigger>
+            </TabsList>
+            {/* Profile */}
+            <TabsContent
+              value="profile"
+              className="flex-1 overflow-y-auto px-6 py-4 space-y-5 mt-0"
+            >
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wide text-gray-400 mb-3">
+                  Personal Information
+                </p>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div className="space-y-1">
+                    <label className="text-xs text-gray-500">First name</label>
+                    <input
+                      type="text"
+                      value={patientForm.first_name}
+                      onChange={(e) =>
+                        setPatientForm((prev) => ({
+                          ...prev,
+                          first_name: e.target.value,
+                        }))
+                      }
+                      className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#9A7B1D]/40 focus:border-[#9A7B1D]"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-xs text-gray-500">Last name</label>
+                    <input
+                      type="text"
+                      value={patientForm.last_name}
+                      onChange={(e) =>
+                        setPatientForm((prev) => ({
+                          ...prev,
+                          last_name: e.target.value,
+                        }))
+                      }
+                      className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#9A7B1D]/40 focus:border-[#9A7B1D]"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-xs text-gray-500">ID number</label>
+                    <input
+                      type="text"
+                      value={patientForm.id_number}
+                      onChange={(e) =>
+                        setPatientForm((prev) => ({
+                          ...prev,
+                          id_number: e.target.value,
+                        }))
+                      }
+                      className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#9A7B1D]/40 focus:border-[#9A7B1D]"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-xs text-gray-500">
+                      Date of birth
+                    </label>
+                    <input
+                      type="date"
+                      value={patientForm.date_of_birth}
+                      onChange={(e) =>
+                        setPatientForm((prev) => ({
+                          ...prev,
+                          date_of_birth: e.target.value,
+                        }))
+                      }
+                      className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#9A7B1D]/40 focus:border-[#9A7B1D]"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-xs text-gray-500">Phone</label>
+                    <input
+                      type="text"
+                      value={patientForm.phone}
+                      onChange={(e) =>
+                        setPatientForm((prev) => ({
+                          ...prev,
+                          phone: e.target.value,
+                        }))
+                      }
+                      className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#9A7B1D]/40 focus:border-[#9A7B1D]"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-xs text-gray-500">Email</label>
+                    <input
+                      type="email"
+                      value={patientForm.email}
+                      onChange={(e) =>
+                        setPatientForm((prev) => ({
+                          ...prev,
+                          email: e.target.value,
+                        }))
+                      }
+                      className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#9A7B1D]/40 focus:border-[#9A7B1D]"
+                    />
+                  </div>
+                  <div className="space-y-1 sm:col-span-2">
+                    <label className="text-xs text-gray-500">Address</label>
+                    <textarea
+                      value={patientForm.address}
+                      rows={2}
+                      onChange={(e) =>
+                        setPatientForm((prev) => ({
+                          ...prev,
+                          address: e.target.value,
+                        }))
+                      }
+                      className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#9A7B1D]/40 focus:border-[#9A7B1D] resize-none"
+                    />
+                  </div>
+                </div>
+              </div>
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wide text-gray-400 mb-3">
+                  Medical Aid
+                </p>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div className="space-y-1">
+                    <label className="text-xs text-gray-500">Medical aid</label>
+                    <input
+                      type="text"
+                      value={patientForm.medical_aid}
+                      onChange={(e) =>
+                        setPatientForm((prev) => ({
+                          ...prev,
+                          medical_aid: e.target.value,
+                        }))
+                      }
+                      className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#9A7B1D]/40 focus:border-[#9A7B1D]"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-xs text-gray-500">
+                      Medical aid number
+                    </label>
+                    <input
+                      type="text"
+                      value={patientForm.medical_aid_number}
+                      onChange={(e) =>
+                        setPatientForm((prev) => ({
+                          ...prev,
+                          medical_aid_number: e.target.value,
+                        }))
+                      }
+                      className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#9A7B1D]/40 focus:border-[#9A7B1D]"
+                    />
+                  </div>
+                </div>
+              </div>
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wide text-gray-400 mb-3">
+                  Emergency Contact
+                </p>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div className="space-y-1">
+                    <label className="text-xs text-gray-500">Name</label>
+                    <input
+                      type="text"
+                      value={patientForm.emergency_contact_name}
+                      onChange={(e) =>
+                        setPatientForm((prev) => ({
+                          ...prev,
+                          emergency_contact_name: e.target.value,
+                        }))
+                      }
+                      className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#9A7B1D]/40 focus:border-[#9A7B1D]"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-xs text-gray-500">Phone</label>
+                    <input
+                      type="text"
+                      value={patientForm.emergency_contact_phone}
+                      onChange={(e) =>
+                        setPatientForm((prev) => ({
+                          ...prev,
+                          emergency_contact_phone: e.target.value,
+                        }))
+                      }
+                      className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#9A7B1D]/40 focus:border-[#9A7B1D]"
+                    />
+                  </div>
+                </div>
+              </div>
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wide text-gray-400 mb-3">
+                  General Notes
+                </p>
+                <textarea
+                  value={patientForm.notes}
+                  rows={3}
+                  onChange={(e) =>
+                    setPatientForm((prev) => ({
+                      ...prev,
+                      notes: e.target.value,
+                    }))
+                  }
+                  placeholder="Any general notes about this patient..."
+                  className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#9A7B1D]/40 focus:border-[#9A7B1D] resize-none"
+                />
+              </div>
+              {(selectedPatient?.created_at || selectedPatient?.updated_at) && (
+                <div className="flex gap-4 text-xs text-gray-400">
+                  {selectedPatient.created_at && (
+                    <span>
+                      Added{" "}
+                      {format(
+                        new Date(selectedPatient.created_at),
+                        "d MMM yyyy",
+                      )}
+                    </span>
+                  )}
+                  {selectedPatient.updated_at && (
+                    <span>
+                      Updated{" "}
+                      {format(
+                        new Date(selectedPatient.updated_at),
+                        "d MMM yyyy",
+                      )}
+                    </span>
+                  )}
+                </div>
+              )}
+              <div className="flex justify-end pb-2">
+                <Button
+                  onClick={handleSavePatientChanges}
+                  disabled={savingPatient}
+                  className="bg-[#9A7B1D] hover:bg-[#7d6418] text-white text-sm"
+                >
+                  {savingPatient ? "Saving..." : "Save Profile"}
+                </Button>
+              </div>
+            </TabsContent>
+            {/* Medical */}
+            <TabsContent
+              value="medical"
+              className="flex-1 overflow-y-auto px-6 py-4 space-y-5 mt-0"
+            >
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wide text-gray-400 mb-3">
+                  Health Overview
+                </p>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div className="space-y-1">
+                    <label className="text-xs text-gray-500">Blood type</label>
+                    <input
+                      type="text"
+                      value={medicalForm.blood_type}
+                      onChange={(e) =>
+                        setMedicalForm((prev) => ({
+                          ...prev,
+                          blood_type: e.target.value,
+                        }))
+                      }
+                      placeholder="e.g. A+"
+                      className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#9A7B1D]/40 focus:border-[#9A7B1D]"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-xs text-gray-500">
+                      Primary physician
+                    </label>
+                    <input
+                      type="text"
+                      value={medicalForm.primary_physician}
+                      onChange={(e) =>
+                        setMedicalForm((prev) => ({
+                          ...prev,
+                          primary_physician: e.target.value,
+                        }))
+                      }
+                      className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#9A7B1D]/40 focus:border-[#9A7B1D]"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-xs text-gray-500">Allergies</label>
+                    <textarea
+                      value={medicalForm.allergies}
+                      rows={3}
+                      onChange={(e) =>
+                        setMedicalForm((prev) => ({
+                          ...prev,
+                          allergies: e.target.value,
+                        }))
+                      }
+                      placeholder="List any known allergies..."
+                      className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#9A7B1D]/40 focus:border-[#9A7B1D] resize-none"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-xs text-gray-500">
+                      Chronic conditions
+                    </label>
+                    <textarea
+                      value={medicalForm.chronic_conditions}
+                      rows={3}
+                      onChange={(e) =>
+                        setMedicalForm((prev) => ({
+                          ...prev,
+                          chronic_conditions: e.target.value,
+                        }))
+                      }
+                      placeholder="Diabetes, hypertension..."
+                      className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#9A7B1D]/40 focus:border-[#9A7B1D] resize-none"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-xs text-gray-500">
+                      Current medications
+                    </label>
+                    <textarea
+                      value={medicalForm.current_medications}
+                      rows={3}
+                      onChange={(e) =>
+                        setMedicalForm((prev) => ({
+                          ...prev,
+                          current_medications: e.target.value,
+                        }))
+                      }
+                      placeholder="Name, dosage..."
+                      className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#9A7B1D]/40 focus:border-[#9A7B1D] resize-none"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-xs text-gray-500">
+                      Family history
+                    </label>
+                    <textarea
+                      value={medicalForm.family_history}
+                      rows={3}
+                      onChange={(e) =>
+                        setMedicalForm((prev) => ({
+                          ...prev,
+                          family_history: e.target.value,
+                        }))
+                      }
+                      className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#9A7B1D]/40 focus:border-[#9A7B1D] resize-none"
+                    />
+                  </div>
+                  <div className="space-y-1 sm:col-span-2">
+                    <label className="text-xs text-gray-500">
+                      Insurance notes
+                    </label>
+                    <textarea
+                      value={medicalForm.insurance_notes}
+                      rows={3}
+                      onChange={(e) =>
+                        setMedicalForm((prev) => ({
+                          ...prev,
+                          insurance_notes: e.target.value,
+                        }))
+                      }
+                      className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#9A7B1D]/40 focus:border-[#9A7B1D] resize-none"
+                    />
+                  </div>
+                </div>
+              </div>
+              <div className="flex justify-end pb-2">
+                <Button
+                  onClick={handleSaveMedicalProfile}
+                  disabled={savingMedicalProfile || !selectedPatient}
+                  className="bg-[#9A7B1D] hover:bg-[#7d6418] text-white text-sm"
+                >
+                  {savingMedicalProfile ? "Saving..." : "Save Medical Details"}
+                </Button>
+              </div>
+            </TabsContent>
+            {/* Dr Notes */}
+            <TabsContent
+              value="notes"
+              className="flex-1 overflow-y-auto px-6 py-4 mt-0 flex flex-col gap-4"
+            >
+              {/* Compose area */}
+              <div className="rounded-xl border border-gray-200 bg-gray-50/60 p-4 space-y-3">
+                <p className="text-xs font-semibold uppercase tracking-wide text-gray-400">
+                  {noteForm.id ? "Edit note" : "New note"}
+                </p>
+                <input
+                  type="text"
+                  value={noteForm.title}
+                  onChange={(e) =>
+                    setNoteForm((prev) => ({ ...prev, title: e.target.value }))
+                  }
+                  placeholder="Title (optional)"
+                  className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-[#9A7B1D]/40 focus:border-[#9A7B1D]"
+                />
+                <textarea
+                  value={noteForm.content}
+                  rows={5}
+                  onChange={(e) =>
+                    setNoteForm((prev) => ({
+                      ...prev,
+                      content: e.target.value,
+                    }))
+                  }
+                  placeholder="Write clinical notes here..."
+                  className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-[#9A7B1D]/40 focus:border-[#9A7B1D] resize-none"
+                />
+                <div className="flex gap-2 justify-end">
+                  {noteForm.id && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() =>
+                        setNoteForm({ id: "", title: "", content: "" })
+                      }
+                    >
+                      Cancel
+                    </Button>
+                  )}
+                  <Button
+                    size="sm"
+                    onClick={handleSaveClinicalNote}
+                    disabled={savingClinicalNote || !selectedPatient}
+                    className="bg-[#9A7B1D] hover:bg-[#7d6418] text-white"
+                  >
+                    {savingClinicalNote
+                      ? "Saving..."
+                      : noteForm.id
+                        ? "Update"
+                        : "Add Note"}
+                  </Button>
+                </div>
+              </div>
+              {/* Notes list */}
+              <div className="space-y-2 pb-2">
+                {patientNotes.length === 0 ? (
+                  <div className="text-center py-10 text-gray-400 text-sm">
+                    No notes yet.
+                  </div>
+                ) : (
+                  patientNotes.map((note) => (
+                    <div
+                      key={note.id}
+                      className="rounded-xl border border-gray-200 bg-white p-4"
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0">
+                          <p className="text-sm font-semibold text-gray-800">
+                            {note.title || "Untitled"}
+                          </p>
+                          <p className="text-xs text-gray-400 mt-0.5">
+                            {note.created_at
+                              ? format(
+                                  new Date(note.created_at),
+                                  "d MMM yyyy - HH:mm",
+                                )
+                              : ""}
+                          </p>
+                        </div>
+                        <div className="flex items-center gap-1 flex-shrink-0">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setNoteForm({
+                                id: note.id,
+                                title: note.title || "",
+                                content: note.content || "",
+                              })
+                            }
+                            className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-400 hover:text-gray-700 transition-colors"
+                          >
+                            <Pencil className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteClinicalNote(note.id)}
+                            className="p-1.5 rounded-lg hover:bg-red-50 text-gray-400 hover:text-red-500 transition-colors"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      </div>
+                      <p className="text-sm text-gray-700 mt-2 whitespace-pre-wrap leading-relaxed">
+                        {note.content}
+                      </p>
+                    </div>
+                  ))
+                )}
+              </div>
+            </TabsContent>
+            {/* Documents */}
+            <TabsContent
+              value="documents"
+              className="flex-1 overflow-y-auto px-6 py-4 mt-0 flex flex-col gap-4"
+            >
+              {/* Upload area */}
+              <div className="rounded-xl border border-gray-200 bg-gray-50/60 p-4 space-y-3">
+                <p className="text-xs font-semibold uppercase tracking-wide text-gray-400">
+                  Upload file
+                </p>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div className="space-y-1">
+                    <label className="text-xs text-gray-500">Category</label>
+                    <select
+                      value={documentForm.category}
+                      onChange={(e) =>
+                        setDocumentForm((prev) => ({
+                          ...prev,
+                          category: e.target.value,
+                        }))
+                      }
+                      className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-[#9A7B1D]/40 focus:border-[#9A7B1D]"
+                    >
+                      {DOCUMENT_CATEGORY_OPTIONS.map((option) => (
+                        <option key={option.value} value={option.value}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-xs text-gray-500">Title</label>
+                    <input
+                      type="text"
+                      value={documentForm.title}
+                      onChange={(e) =>
+                        setDocumentForm((prev) => ({
+                          ...prev,
+                          title: e.target.value,
+                        }))
+                      }
+                      placeholder="Document title"
+                      className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-[#9A7B1D]/40 focus:border-[#9A7B1D]"
+                    />
+                  </div>
+                </div>
+                <div className="flex items-center gap-3">
+                  <label className="flex-1 flex items-center gap-2 px-3 py-2 border border-dashed border-gray-300 rounded-lg cursor-pointer bg-white hover:border-[#9A7B1D]/60 transition-colors text-sm text-gray-500">
+                    <Upload className="w-4 h-4 flex-shrink-0 text-gray-400" />
+                    <span className="truncate">
+                      {documentForm.file
+                        ? documentForm.file.name
+                        : "Choose file..."}
+                    </span>
+                    <input
+                      type="file"
+                      className="sr-only"
+                      onChange={(e) =>
+                        setDocumentForm((prev) => ({
+                          ...prev,
+                          file: e.target.files?.[0] || null,
+                        }))
+                      }
+                    />
+                  </label>
+                  <Button
+                    size="sm"
+                    onClick={handleUploadDocument}
+                    disabled={uploadingDocument || !selectedPatient}
+                    className="flex-shrink-0 bg-[#9A7B1D] hover:bg-[#7d6418] text-white"
+                  >
+                    {uploadingDocument ? "Uploading..." : "Upload"}
+                  </Button>
+                </div>
+              </div>
+              {/* Document list */}
+              <div className="space-y-2 pb-2">
+                {patientDocuments.length === 0 ? (
+                  <div className="text-center py-10 text-gray-400 text-sm">
+                    No files uploaded yet.
+                  </div>
+                ) : (
+                  Object.keys(groupedPatientDocuments)
+                    .sort((a, b) =>
+                      getDocumentCategoryLabel(a).localeCompare(
+                        getDocumentCategoryLabel(b),
+                      ),
+                    )
+                    .map((category) => {
+                      const categoryLabel = getDocumentCategoryLabel(category);
+                      const folderName = getDocumentFolderName(category);
+
+                      return (
+                        <details
+                          key={category}
+                          open
+                          className="rounded-xl border border-gray-200 bg-white overflow-hidden"
+                        >
+                          <summary className="list-none cursor-pointer px-4 py-3 bg-gray-50/80 border-b border-gray-100 flex items-center justify-between">
+                            <div className="flex items-center gap-2 min-w-0">
+                              <span className="text-sm font-semibold text-gray-800 truncate">
+                                {categoryLabel}
+                              </span>
+                              <Badge
+                                variant="outline"
+                                className="text-[10px] h-4 px-1.5 text-gray-500 border-gray-200"
+                              >
+                                /{folderName}
+                              </Badge>
+                            </div>
+                            <span className="text-xs text-gray-400">
+                              {
+                                Object.values(groupedPatientDocuments[category])
+                                  .flatMap((months) =>
+                                    Object.values(
+                                      months as Record<string, any[]>,
+                                    ),
+                                  )
+                                  .flat().length
+                              }{" "}
+                              file(s)
+                            </span>
+                          </summary>
+
+                          <div className="p-3 space-y-3">
+                            {Object.keys(groupedPatientDocuments[category])
+                              .sort((a, b) => Number(b) - Number(a))
+                              .map((year) => (
+                                <details
+                                  key={`${category}-${year}`}
+                                  open
+                                  className="rounded-lg border border-gray-100"
+                                >
+                                  <summary className="list-none cursor-pointer px-3 py-2 bg-gray-50 text-xs font-semibold text-gray-600 uppercase tracking-wide">
+                                    {year}
+                                  </summary>
+
+                                  <div className="p-2 space-y-2">
+                                    {Object.keys(
+                                      groupedPatientDocuments[category][year],
+                                    )
+                                      .sort((a, b) => Number(b) - Number(a))
+                                      .map((month) => {
+                                        const monthDocs =
+                                          groupedPatientDocuments[category][
+                                            year
+                                          ][month].sort((a: any, b: any) => {
+                                            const aDate = a.created_at
+                                              ? new Date(a.created_at).getTime()
+                                              : 0;
+                                            const bDate = b.created_at
+                                              ? new Date(b.created_at).getTime()
+                                              : 0;
+                                            return bDate - aDate;
+                                          });
+
+                                        const monthDate = new Date(
+                                          Number(year),
+                                          Number(month) - 1,
+                                          1,
+                                        );
+
+                                        return (
+                                          <details
+                                            key={`${category}-${year}-${month}`}
+                                            open
+                                            className="rounded-md border border-gray-100"
+                                          >
+                                            <summary className="list-none cursor-pointer px-3 py-2 text-xs font-medium text-gray-600 bg-white">
+                                              {format(monthDate, "MMMM")} {year}
+                                            </summary>
+
+                                            <div className="p-2 space-y-1.5">
+                                              {monthDocs.map(
+                                                (document: any) => {
+                                                  const isXray =
+                                                    document.category ===
+                                                    "x-ray";
+                                                  return (
+                                                    <div
+                                                      key={document.id}
+                                                      className="rounded-md border border-gray-100 p-2.5 flex items-center gap-2"
+                                                    >
+                                                      <div className="flex-shrink-0 w-7 h-7 rounded-md bg-[#9A7B1D]/10 flex items-center justify-center">
+                                                        {isXray ? (
+                                                          <ImageIcon className="w-3.5 h-3.5 text-[#9A7B1D]" />
+                                                        ) : (
+                                                          <FileText className="w-3.5 h-3.5 text-[#9A7B1D]" />
+                                                        )}
+                                                      </div>
+
+                                                      <div className="min-w-0 flex-1">
+                                                        <p className="text-sm font-medium text-gray-800 truncate">
+                                                          {document.title}
+                                                        </p>
+                                                        <p className="text-xs text-gray-400 truncate">
+                                                          {document.file_name}
+                                                        </p>
+                                                      </div>
+
+                                                      <div className="flex-shrink-0 flex items-center gap-1">
+                                                        <button
+                                                          type="button"
+                                                          onClick={() =>
+                                                            handleOpenDocument(
+                                                              document,
+                                                            )
+                                                          }
+                                                          className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-400 hover:text-[#9A7B1D] transition-colors"
+                                                          title="Open"
+                                                        >
+                                                          {isXray ? (
+                                                            <ImageIcon className="w-4 h-4" />
+                                                          ) : (
+                                                            <FileText className="w-4 h-4" />
+                                                          )}
+                                                        </button>
+                                                        <button
+                                                          type="button"
+                                                          onClick={() =>
+                                                            handleDeleteDocument(
+                                                              document,
+                                                            )
+                                                          }
+                                                          className="p-1.5 rounded-lg hover:bg-red-50 text-gray-400 hover:text-red-500 transition-colors"
+                                                          title="Delete"
+                                                        >
+                                                          <Trash2 className="w-4 h-4" />
+                                                        </button>
+                                                      </div>
+                                                    </div>
+                                                  );
+                                                },
+                                              )}
+                                            </div>
+                                          </details>
+                                        );
+                                      })}
+                                  </div>
+                                </details>
+                              ))}
+                          </div>
+                        </details>
+                      );
+                    })
+                )}
+              </div>
+            </TabsContent>
+          </Tabs>
+
+          {/* Footer */}
+          <div className="flex-shrink-0 flex justify-end px-6 py-3 border-t border-gray-100">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setShowPatientDetailsDialog(false)}
+            >
+              Close
+            </Button>
+          </div>
         </DialogContent>
       </Dialog>
     </>
