@@ -1,4 +1,4 @@
-﻿import { useState, useEffect } from "react";
+﻿import { useState, useEffect, useRef } from "react";
 import { Button } from "./ui/button";
 import { Badge } from "./ui/badge";
 import { Switch } from "./ui/switch";
@@ -33,11 +33,11 @@ import {
   Eye,
   Menu,
   ChevronLeft,
-  Upload,
   FileText,
   Image as ImageIcon,
   Trash2,
   Pencil,
+  Plus,
 } from "lucide-react";
 import { supabase } from "../../../utils/supabase/client";
 import { format } from "date-fns";
@@ -1612,6 +1612,13 @@ function PatientsContent() {
   const [selectedPatient, setSelectedPatient] = useState<any>(null);
   const [patientNotes, setPatientNotes] = useState<any[]>([]);
   const [patientDocuments, setPatientDocuments] = useState<any[]>([]);
+  const [activeDocumentCategoryTab, setActiveDocumentCategoryTab] =
+    useState("medical-record");
+  const [selectedDocumentPreview, setSelectedDocumentPreview] =
+    useState<any>(null);
+  const [selectedDocumentPreviewUrl, setSelectedDocumentPreviewUrl] =
+    useState("");
+  const [loadingDocumentPreview, setLoadingDocumentPreview] = useState(false);
   const [patientForm, setPatientForm] = useState(EMPTY_PATIENT_FORM);
   const [newPatientForm, setNewPatientForm] = useState(EMPTY_PATIENT_FORM);
   const [medicalForm, setMedicalForm] = useState(EMPTY_MEDICAL_FORM);
@@ -1620,20 +1627,35 @@ function PatientsContent() {
     title: "",
     content: "",
   });
-  const [documentForm, setDocumentForm] = useState<{
-    category: string;
-    title: string;
-    file: File | null;
-  }>({
-    category: "medical-record",
-    title: "",
-    file: null,
-  });
+  const documentUploadInputRef = useRef<HTMLInputElement | null>(null);
   const [loading, setLoading] = useState(true);
 
   const getDocumentCategoryLabel = (category: string) =>
     DOCUMENT_CATEGORY_OPTIONS.find((option) => option.value === category)
       ?.label || "Other";
+
+  const getDocumentTabLabel = (category: string) => {
+    if (category === "other") return "Other Documents";
+    return getDocumentCategoryLabel(category);
+  };
+
+  const normalizeDocumentCategory = (category?: string) => {
+    const knownCategory = DOCUMENT_CATEGORY_OPTIONS.some(
+      (option) => option.value === category,
+    );
+    return knownCategory ? category || "other" : "other";
+  };
+
+  const documentCategoryTabs = [
+    ...DOCUMENT_CATEGORY_OPTIONS.filter((option) => option.value !== "other"),
+    { value: "other", label: "Other Documents" },
+  ];
+
+  const visiblePatientDocuments = patientDocuments.filter(
+    (document) =>
+      normalizeDocumentCategory(document.category) ===
+      activeDocumentCategoryTab,
+  );
 
   const getDocumentFolderName = (category: string) => {
     const folderMap: Record<string, string> = {
@@ -1651,28 +1673,25 @@ function PatientsContent() {
     return folderMap[category] || "other";
   };
 
-  const groupedPatientDocuments = patientDocuments.reduce(
-    (acc, document) => {
-      const category = document.category || "other";
-      const createdDate = document.created_at
-        ? new Date(document.created_at)
-        : new Date();
-      const year = String(createdDate.getFullYear());
-      const month = String(createdDate.getMonth() + 1).padStart(2, "0");
-
-      if (!acc[category]) acc[category] = {};
-      if (!acc[category][year]) acc[category][year] = {};
-      if (!acc[category][year][month]) acc[category][year][month] = [];
-
-      acc[category][year][month].push(document);
-      return acc;
-    },
-    {} as Record<string, Record<string, Record<string, any[]>>>,
-  );
-
   useEffect(() => {
     fetchPatients();
   }, []);
+
+  useEffect(() => {
+    if (!visiblePatientDocuments.length) {
+      setSelectedDocumentPreview(null);
+      setSelectedDocumentPreviewUrl("");
+      return;
+    }
+
+    const selectedStillExists = visiblePatientDocuments.some(
+      (document) => document.id === selectedDocumentPreview?.id,
+    );
+
+    if (!selectedStillExists) {
+      void handleSelectDocumentForPreview(visiblePatientDocuments[0]);
+    }
+  }, [activeDocumentCategoryTab, patientDocuments]);
 
   const fetchPatients = async () => {
     try {
@@ -1796,7 +1815,9 @@ function PatientsContent() {
       last_visit: toDateTimeLocalValue(patient.last_visit),
     });
     setNoteForm({ id: "", title: "", content: "" });
-    setDocumentForm({ category: "medical-record", title: "", file: null });
+    setActiveDocumentCategoryTab("medical-record");
+    setSelectedDocumentPreview(null);
+    setSelectedDocumentPreviewUrl("");
     setShowPatientDetailsDialog(true);
     await loadPatientRelatedData(patient.id);
   };
@@ -1996,6 +2017,53 @@ function PatientsContent() {
     }
   };
 
+  const getDocumentExtension = (document: any) => {
+    const fileName = String(document?.file_name || "");
+    const extension = fileName.split(".").pop()?.toLowerCase();
+    return extension || "";
+  };
+
+  const isImageDocument = (document: any) => {
+    const extension = getDocumentExtension(document);
+    return (
+      String(document?.mime_type || "").startsWith("image/") ||
+      ["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg"].includes(extension)
+    );
+  };
+
+  const isPdfDocument = (document: any) => {
+    const extension = getDocumentExtension(document);
+    return (
+      String(document?.mime_type || "") === "application/pdf" ||
+      extension === "pdf"
+    );
+  };
+
+  const handleSelectDocumentForPreview = async (document: any) => {
+    setSelectedDocumentPreview(document);
+    setSelectedDocumentPreviewUrl("");
+    setLoadingDocumentPreview(true);
+
+    try {
+      const { data, error } = await supabase.storage
+        .from("patient-files")
+        .createSignedUrl(document.file_path, 300);
+
+      if (error || !data?.signedUrl) {
+        console.error("Failed to preview document:", error);
+        toast.error("Could not load document preview");
+        return;
+      }
+
+      setSelectedDocumentPreviewUrl(data.signedUrl);
+    } catch (error) {
+      console.error("Failed to preview document:", error);
+      toast.error("Could not load document preview");
+    } finally {
+      setLoadingDocumentPreview(false);
+    }
+  };
+
   const handleDeleteDocument = async (document: any) => {
     if (!selectedPatient) return;
 
@@ -2019,6 +2087,11 @@ function PatientsContent() {
         return;
       }
 
+      if (selectedDocumentPreview?.id === document.id) {
+        setSelectedDocumentPreview(null);
+        setSelectedDocumentPreviewUrl("");
+      }
+
       toast.success("Document deleted");
       await loadPatientRelatedData(selectedPatient.id);
     } catch (error) {
@@ -2027,25 +2100,35 @@ function PatientsContent() {
     }
   };
 
-  const handleUploadDocument = async () => {
+  const inferDocumentCategory = (file: File) => {
+    if (file.type.startsWith("image/")) return "x-ray";
+    if (file.type === "application/pdf") return "medical-record";
+    return "other";
+  };
+
+  const handleQuickUploadDocument = async (
+    file: File | null,
+    preferredCategory?: string,
+  ) => {
     if (!selectedPatient) return;
-    if (!documentForm.file) {
+    if (!file) {
       toast.error("Please choose a file to upload");
-      return;
-    }
-    if (!documentForm.title.trim()) {
-      toast.error("Please provide a document title");
       return;
     }
 
     try {
       setUploadingDocument(true);
 
+      const category =
+        preferredCategory && preferredCategory !== "other"
+          ? preferredCategory
+          : preferredCategory || inferDocumentCategory(file);
       const now = new Date();
       const year = String(now.getFullYear());
       const month = String(now.getMonth() + 1).padStart(2, "0");
-      const folderName = getDocumentFolderName(documentForm.category);
-      const safeTitle = documentForm.title
+      const folderName = getDocumentFolderName(category);
+      const titleFromName = file.name.replace(/\.[^/.]+$/, "") || "Document";
+      const safeTitle = titleFromName
         .trim()
         .toLowerCase()
         .replace(/\s+/g, "-")
@@ -2053,7 +2136,7 @@ function PatientsContent() {
         .replace(/-+/g, "-")
         .slice(0, 40);
 
-      const sanitizedName = documentForm.file.name
+      const sanitizedName = file.name
         .replace(/\s+/g, "-")
         .replace(/[^a-zA-Z0-9._-]/g, "")
         .toLowerCase();
@@ -2061,7 +2144,7 @@ function PatientsContent() {
 
       const { error: uploadError } = await supabase.storage
         .from("patient-files")
-        .upload(filePath, documentForm.file, {
+        .upload(filePath, file, {
           cacheControl: "3600",
           upsert: false,
         });
@@ -2072,18 +2155,20 @@ function PatientsContent() {
         return;
       }
 
-      const { error: insertError } = await supabase
+      const { data: insertedDocument, error: insertError } = await supabase
         .from("patient_documents")
         .insert({
           patient_id: selectedPatient.id,
-          category: documentForm.category,
-          title: documentForm.title.trim(),
-          file_name: documentForm.file.name,
+          category,
+          title: titleFromName,
+          file_name: file.name,
           file_path: filePath,
-          mime_type: documentForm.file.type || null,
-          size_bytes: documentForm.file.size,
+          mime_type: file.type || null,
+          size_bytes: file.size,
           uploaded_by: "Admin",
-        });
+        })
+        .select("*")
+        .single();
 
       if (insertError) {
         console.error("Failed to save document metadata:", insertError);
@@ -2092,8 +2177,11 @@ function PatientsContent() {
       }
 
       toast.success("Document uploaded");
-      setDocumentForm({ category: "medical-record", title: "", file: null });
       await loadPatientRelatedData(selectedPatient.id);
+
+      if (insertedDocument) {
+        await handleSelectDocumentForPreview(insertedDocument);
+      }
     } catch (error) {
       console.error("Failed to upload document:", error);
       toast.error("Failed to upload document");
@@ -2525,17 +2613,15 @@ function PatientsContent() {
             setPatientDocuments([]);
             setMedicalForm(EMPTY_MEDICAL_FORM);
             setNoteForm({ id: "", title: "", content: "" });
-            setDocumentForm({
-              category: "medical-record",
-              title: "",
-              file: null,
-            });
+            setActiveDocumentCategoryTab("medical-record");
+            setSelectedDocumentPreview(null);
+            setSelectedDocumentPreviewUrl("");
           }
         }}
       >
-        <DialogContent className="w-[calc(100vw-1rem)] sm:w-[96vw] max-w-4xl max-h-[92vh] flex flex-col p-0 gap-0 overflow-hidden">
+        <DialogContent className="w-[calc(100vw-0.75rem)] sm:w-[96vw] max-w-5xl h-[92vh] max-h-[92vh] flex flex-col p-0 gap-0 overflow-hidden">
           {/* Header */}
-          <div className="flex items-start gap-3 px-6 pt-6 pb-4 border-b border-gray-100">
+          <div className="flex items-start gap-3 px-4 sm:px-6 pt-5 sm:pt-6 pb-4 border-b border-gray-100">
             <div className="flex-shrink-0 w-10 h-10 rounded-full bg-[#9A7B1D]/10 flex items-center justify-center">
               <User className="w-5 h-5 text-[#9A7B1D]" />
             </div>
@@ -2565,34 +2651,36 @@ function PatientsContent() {
           </div>
           {/* Tabs */}
           <Tabs defaultValue="profile" className="flex flex-col flex-1 min-h-0">
-            <TabsList className="flex-shrink-0 mx-6 mt-3 mb-0 bg-gray-100 rounded-lg h-9 w-auto self-start gap-0.5">
-              <TabsTrigger value="profile" className="text-xs px-3">
-                Profile
-              </TabsTrigger>
-              <TabsTrigger value="medical" className="text-xs px-3">
-                Medical
-              </TabsTrigger>
-              <TabsTrigger value="notes" className="text-xs px-3">
-                Dr Notes
-                {patientNotes.length > 0 && (
-                  <span className="ml-1.5 inline-flex items-center justify-center w-4 h-4 rounded-full bg-[#9A7B1D]/15 text-[#9A7B1D] text-[10px] font-semibold">
-                    {patientNotes.length}
-                  </span>
-                )}
-              </TabsTrigger>
-              <TabsTrigger value="documents" className="text-xs px-3">
-                Documents
-                {patientDocuments.length > 0 && (
-                  <span className="ml-1.5 inline-flex items-center justify-center w-4 h-4 rounded-full bg-[#9A7B1D]/15 text-[#9A7B1D] text-[10px] font-semibold">
-                    {patientDocuments.length}
-                  </span>
-                )}
-              </TabsTrigger>
-            </TabsList>
+            <div className="flex-shrink-0 mt-3 mb-0 px-4 sm:px-6 overflow-x-auto">
+              <TabsList className="bg-gray-100 rounded-lg h-9 w-max min-w-max gap-0.5">
+                <TabsTrigger value="profile" className="text-xs px-3">
+                  Profile
+                </TabsTrigger>
+                <TabsTrigger value="medical" className="text-xs px-3">
+                  Medical
+                </TabsTrigger>
+                <TabsTrigger value="notes" className="text-xs px-3">
+                  Dr Notes
+                  {patientNotes.length > 0 && (
+                    <span className="ml-1.5 inline-flex items-center justify-center w-4 h-4 rounded-full bg-[#9A7B1D]/15 text-[#9A7B1D] text-[10px] font-semibold">
+                      {patientNotes.length}
+                    </span>
+                  )}
+                </TabsTrigger>
+                <TabsTrigger value="documents" className="text-xs px-3">
+                  Documents
+                  {patientDocuments.length > 0 && (
+                    <span className="ml-1.5 inline-flex items-center justify-center w-4 h-4 rounded-full bg-[#9A7B1D]/15 text-[#9A7B1D] text-[10px] font-semibold">
+                      {patientDocuments.length}
+                    </span>
+                  )}
+                </TabsTrigger>
+              </TabsList>
+            </div>
             {/* Profile */}
             <TabsContent
               value="profile"
-              className="flex-1 overflow-y-auto px-6 py-4 space-y-5 mt-0"
+              className="flex-1 overflow-auto px-4 sm:px-6 py-4 space-y-5 mt-0"
             >
               <div>
                 <p className="text-xs font-semibold uppercase tracking-wide text-gray-400 mb-3">
@@ -2825,7 +2913,7 @@ function PatientsContent() {
             {/* Medical */}
             <TabsContent
               value="medical"
-              className="flex-1 overflow-y-auto px-6 py-4 space-y-5 mt-0"
+              className="flex-1 overflow-auto px-4 sm:px-6 py-4 space-y-5 mt-0"
             >
               <div>
                 <p className="text-xs font-semibold uppercase tracking-wide text-gray-400 mb-3">
@@ -2959,7 +3047,7 @@ function PatientsContent() {
             {/* Dr Notes */}
             <TabsContent
               value="notes"
-              className="flex-1 overflow-y-auto px-6 py-4 mt-0 flex flex-col gap-4"
+              className="flex-1 overflow-auto px-4 sm:px-6 py-4 mt-0 flex flex-col gap-4"
             >
               {/* Compose area */}
               <div className="rounded-xl border border-gray-200 bg-gray-50/60 p-4 space-y-3">
@@ -3073,255 +3161,210 @@ function PatientsContent() {
             {/* Documents */}
             <TabsContent
               value="documents"
-              className="flex-1 overflow-y-auto px-6 py-4 mt-0 flex flex-col gap-4"
+              className="flex-1 overflow-auto px-4 sm:px-6 py-4 mt-0"
             >
-              {/* Upload area */}
-              <div className="rounded-xl border border-gray-200 bg-gray-50/60 p-4 space-y-3">
-                <p className="text-xs font-semibold uppercase tracking-wide text-gray-400">
-                  Upload file
-                </p>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <div className="space-y-1">
-                    <label className="text-xs text-gray-500">Category</label>
-                    <select
-                      value={documentForm.category}
-                      onChange={(e) =>
-                        setDocumentForm((prev) => ({
-                          ...prev,
-                          category: e.target.value,
-                        }))
-                      }
-                      className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-[#9A7B1D]/40 focus:border-[#9A7B1D]"
+              <div className="h-full min-w-0 grid grid-cols-1 lg:grid-cols-2 gap-4">
+                <div className="rounded-xl border border-gray-200 bg-white p-3 overflow-auto">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-gray-400 mb-3">
+                    Documents
+                  </p>
+
+                  <input
+                    ref={documentUploadInputRef}
+                    type="file"
+                    className="hidden"
+                    onChange={(e) => {
+                      const file = e.target.files?.[0] || null;
+                      void handleQuickUploadDocument(
+                        file,
+                        activeDocumentCategoryTab,
+                      );
+                      e.currentTarget.value = "";
+                    }}
+                  />
+
+                  <div className="mb-3 overflow-x-auto">
+                    <div className="inline-flex min-w-full gap-1 rounded-lg border border-gray-200 bg-gray-50 p-1">
+                      {documentCategoryTabs.map((tab) => {
+                        const tabCount = patientDocuments.filter(
+                          (document) =>
+                            normalizeDocumentCategory(document.category) ===
+                            tab.value,
+                        ).length;
+
+                        const isActive =
+                          activeDocumentCategoryTab === tab.value;
+
+                        return (
+                          <button
+                            key={tab.value}
+                            type="button"
+                            onClick={() =>
+                              setActiveDocumentCategoryTab(tab.value)
+                            }
+                            className={`whitespace-nowrap rounded-md px-2.5 py-1.5 text-xs font-medium transition-colors ${
+                              isActive
+                                ? "bg-white text-[#7d6418] shadow-sm"
+                                : "text-gray-500 hover:text-gray-700"
+                            }`}
+                          >
+                            {tab.label} {tabCount > 0 ? `(${tabCount})` : ""}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-3 gap-2 min-w-0">
+                    <button
+                      type="button"
+                      onClick={() => documentUploadInputRef.current?.click()}
+                      disabled={!selectedPatient || uploadingDocument}
+                      className="relative h-20 sm:h-24 rounded-xl border border-dashed border-[#9A7B1D]/50 bg-[#9A7B1D]/5 hover:bg-[#9A7B1D]/10 transition-colors p-1.5 flex flex-col items-center justify-center text-center disabled:opacity-60 disabled:cursor-not-allowed"
                     >
-                      {DOCUMENT_CATEGORY_OPTIONS.map((option) => (
-                        <option key={option.value} value={option.value}>
-                          {option.label}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                  <div className="space-y-1">
-                    <label className="text-xs text-gray-500">Title</label>
-                    <input
-                      type="text"
-                      value={documentForm.title}
-                      onChange={(e) =>
-                        setDocumentForm((prev) => ({
-                          ...prev,
-                          title: e.target.value,
-                        }))
-                      }
-                      placeholder="Document title"
-                      className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-[#9A7B1D]/40 focus:border-[#9A7B1D]"
-                    />
-                  </div>
-                </div>
-                <div className="flex items-center gap-3">
-                  <label className="flex-1 flex items-center gap-2 px-3 py-2 border border-dashed border-gray-300 rounded-lg cursor-pointer bg-white hover:border-[#9A7B1D]/60 transition-colors text-sm text-gray-500">
-                    <Upload className="w-4 h-4 flex-shrink-0 text-gray-400" />
-                    <span className="truncate">
-                      {documentForm.file
-                        ? documentForm.file.name
-                        : "Choose file..."}
-                    </span>
-                    <input
-                      type="file"
-                      className="sr-only"
-                      onChange={(e) =>
-                        setDocumentForm((prev) => ({
-                          ...prev,
-                          file: e.target.files?.[0] || null,
-                        }))
-                      }
-                    />
-                  </label>
-                  <Button
-                    size="sm"
-                    onClick={handleUploadDocument}
-                    disabled={uploadingDocument || !selectedPatient}
-                    className="flex-shrink-0 bg-[#9A7B1D] hover:bg-[#7d6418] text-white"
-                  >
-                    {uploadingDocument ? "Uploading..." : "Upload"}
-                  </Button>
-                </div>
-              </div>
-              {/* Document list */}
-              <div className="space-y-2 pb-2">
-                {patientDocuments.length === 0 ? (
-                  <div className="text-center py-10 text-gray-400 text-sm">
-                    No files uploaded yet.
-                  </div>
-                ) : (
-                  Object.keys(groupedPatientDocuments)
-                    .sort((a, b) =>
-                      getDocumentCategoryLabel(a).localeCompare(
-                        getDocumentCategoryLabel(b),
-                      ),
-                    )
-                    .map((category) => {
-                      const categoryLabel = getDocumentCategoryLabel(category);
-                      const folderName = getDocumentFolderName(category);
+                      <div className="relative">
+                        <FileText className="w-7 h-7 text-[#9A7B1D]" />
+                        <div className="absolute inset-0 flex items-center justify-center">
+                          <Plus className="w-3 h-3 text-[#9A7B1D]" />
+                        </div>
+                      </div>
+                      <p className="mt-1 text-[10px] font-medium text-[#7d6418] leading-tight">
+                        {uploadingDocument ? "Uploading..." : "Add file"}
+                      </p>
+                    </button>
+
+                    {visiblePatientDocuments.map((document) => {
+                      const isSelected =
+                        selectedDocumentPreview?.id === document.id;
+                      const isImage = isImageDocument(document);
 
                       return (
-                        <details
-                          key={category}
-                          open
-                          className="rounded-xl border border-gray-200 bg-white overflow-hidden"
+                        <div
+                          key={document.id}
+                          role="button"
+                          tabIndex={0}
+                          onClick={() =>
+                            void handleSelectDocumentForPreview(document)
+                          }
+                          onKeyDown={(event) => {
+                            if (event.key === "Enter" || event.key === " ") {
+                              event.preventDefault();
+                              void handleSelectDocumentForPreview(document);
+                            }
+                          }}
+                          className={`relative h-20 sm:h-24 rounded-xl border p-1.5 text-left transition-colors cursor-pointer ${
+                            isSelected
+                              ? "border-[#9A7B1D] bg-[#9A7B1D]/10"
+                              : "border-gray-200 bg-gray-50 hover:bg-gray-100"
+                          }`}
                         >
-                          <summary className="list-none cursor-pointer px-4 py-3 bg-gray-50/80 border-b border-gray-100 flex items-center justify-between">
-                            <div className="flex items-center gap-2 min-w-0">
-                              <span className="text-sm font-semibold text-gray-800 truncate">
-                                {categoryLabel}
-                              </span>
-                              <Badge
-                                variant="outline"
-                                className="text-[10px] h-4 px-1.5 text-gray-500 border-gray-200"
-                              >
-                                /{folderName}
-                              </Badge>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              void handleDeleteDocument(document);
+                            }}
+                            className="absolute top-1.5 right-1.5 p-1 rounded-md text-gray-400 hover:text-red-500 hover:bg-red-50"
+                            title="Delete file"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+
+                          <div className="w-full h-full flex flex-col items-center justify-center text-center">
+                            <div className="w-8 h-8 rounded-lg bg-white border border-gray-200 flex items-center justify-center mb-1">
+                              {isImage ? (
+                                <ImageIcon className="w-4 h-4 text-[#9A7B1D]" />
+                              ) : (
+                                <FileText className="w-4 h-4 text-[#9A7B1D]" />
+                              )}
                             </div>
-                            <span className="text-xs text-gray-400">
-                              {
-                                Object.values(groupedPatientDocuments[category])
-                                  .flatMap((months) =>
-                                    Object.values(
-                                      months as Record<string, any[]>,
-                                    ),
-                                  )
-                                  .flat().length
-                              }{" "}
-                              file(s)
-                            </span>
-                          </summary>
-
-                          <div className="p-3 space-y-3">
-                            {Object.keys(groupedPatientDocuments[category])
-                              .sort((a, b) => Number(b) - Number(a))
-                              .map((year) => (
-                                <details
-                                  key={`${category}-${year}`}
-                                  open
-                                  className="rounded-lg border border-gray-100"
-                                >
-                                  <summary className="list-none cursor-pointer px-3 py-2 bg-gray-50 text-xs font-semibold text-gray-600 uppercase tracking-wide">
-                                    {year}
-                                  </summary>
-
-                                  <div className="p-2 space-y-2">
-                                    {Object.keys(
-                                      groupedPatientDocuments[category][year],
-                                    )
-                                      .sort((a, b) => Number(b) - Number(a))
-                                      .map((month) => {
-                                        const monthDocs =
-                                          groupedPatientDocuments[category][
-                                            year
-                                          ][month].sort((a: any, b: any) => {
-                                            const aDate = a.created_at
-                                              ? new Date(a.created_at).getTime()
-                                              : 0;
-                                            const bDate = b.created_at
-                                              ? new Date(b.created_at).getTime()
-                                              : 0;
-                                            return bDate - aDate;
-                                          });
-
-                                        const monthDate = new Date(
-                                          Number(year),
-                                          Number(month) - 1,
-                                          1,
-                                        );
-
-                                        return (
-                                          <details
-                                            key={`${category}-${year}-${month}`}
-                                            open
-                                            className="rounded-md border border-gray-100"
-                                          >
-                                            <summary className="list-none cursor-pointer px-3 py-2 text-xs font-medium text-gray-600 bg-white">
-                                              {format(monthDate, "MMMM")} {year}
-                                            </summary>
-
-                                            <div className="p-2 space-y-1.5">
-                                              {monthDocs.map(
-                                                (document: any) => {
-                                                  const isXray =
-                                                    document.category ===
-                                                    "x-ray";
-                                                  return (
-                                                    <div
-                                                      key={document.id}
-                                                      className="rounded-md border border-gray-100 p-2.5 flex items-center gap-2"
-                                                    >
-                                                      <div className="flex-shrink-0 w-7 h-7 rounded-md bg-[#9A7B1D]/10 flex items-center justify-center">
-                                                        {isXray ? (
-                                                          <ImageIcon className="w-3.5 h-3.5 text-[#9A7B1D]" />
-                                                        ) : (
-                                                          <FileText className="w-3.5 h-3.5 text-[#9A7B1D]" />
-                                                        )}
-                                                      </div>
-
-                                                      <div className="min-w-0 flex-1">
-                                                        <p className="text-sm font-medium text-gray-800 truncate">
-                                                          {document.title}
-                                                        </p>
-                                                        <p className="text-xs text-gray-400 truncate">
-                                                          {document.file_name}
-                                                        </p>
-                                                      </div>
-
-                                                      <div className="flex-shrink-0 flex items-center gap-1">
-                                                        <button
-                                                          type="button"
-                                                          onClick={() =>
-                                                            handleOpenDocument(
-                                                              document,
-                                                            )
-                                                          }
-                                                          className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-400 hover:text-[#9A7B1D] transition-colors"
-                                                          title="Open"
-                                                        >
-                                                          {isXray ? (
-                                                            <ImageIcon className="w-4 h-4" />
-                                                          ) : (
-                                                            <FileText className="w-4 h-4" />
-                                                          )}
-                                                        </button>
-                                                        <button
-                                                          type="button"
-                                                          onClick={() =>
-                                                            handleDeleteDocument(
-                                                              document,
-                                                            )
-                                                          }
-                                                          className="p-1.5 rounded-lg hover:bg-red-50 text-gray-400 hover:text-red-500 transition-colors"
-                                                          title="Delete"
-                                                        >
-                                                          <Trash2 className="w-4 h-4" />
-                                                        </button>
-                                                      </div>
-                                                    </div>
-                                                  );
-                                                },
-                                              )}
-                                            </div>
-                                          </details>
-                                        );
-                                      })}
-                                  </div>
-                                </details>
-                              ))}
+                            <p className="text-[10px] font-medium text-gray-700 line-clamp-2 break-words px-0.5 leading-tight">
+                              {document.title || document.file_name}
+                            </p>
                           </div>
-                        </details>
+                        </div>
                       );
-                    })
-                )}
+                    })}
+                  </div>
+
+                  {visiblePatientDocuments.length === 0 && (
+                    <p className="text-sm text-gray-400 mt-4 text-center">
+                      No files in{" "}
+                      {getDocumentTabLabel(activeDocumentCategoryTab)}.
+                    </p>
+                  )}
+                </div>
+
+                <div className="rounded-xl border border-gray-200 bg-white p-4 min-h-[320px] flex flex-col min-w-0 overflow-auto">
+                  <div className="flex items-start justify-between gap-3 pb-3 border-b border-gray-100">
+                    <div className="min-w-0">
+                      <p className="text-xs font-semibold uppercase tracking-wide text-gray-400">
+                        Preview
+                      </p>
+                      <p className="text-sm font-medium text-gray-800 truncate mt-1">
+                        {selectedDocumentPreview
+                          ? selectedDocumentPreview.title ||
+                            selectedDocumentPreview.file_name
+                          : "Select a file"}
+                      </p>
+                    </div>
+                    {selectedDocumentPreview && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() =>
+                          handleOpenDocument(selectedDocumentPreview)
+                        }
+                        className="text-xs"
+                      >
+                        Open
+                      </Button>
+                    )}
+                  </div>
+
+                  <div className="flex-1 mt-3 rounded-lg border border-gray-100 bg-gray-50 overflow-auto flex items-center justify-center min-h-[220px]">
+                    {!selectedDocumentPreview ? (
+                      <p className="text-sm text-gray-400 px-4 text-center">
+                        Click a file icon to preview it here.
+                      </p>
+                    ) : loadingDocumentPreview ? (
+                      <p className="text-sm text-gray-400">
+                        Loading preview...
+                      </p>
+                    ) : !selectedDocumentPreviewUrl ? (
+                      <p className="text-sm text-gray-400 px-4 text-center">
+                        Preview unavailable. Use Open to view this file.
+                      </p>
+                    ) : isImageDocument(selectedDocumentPreview) ? (
+                      <img
+                        src={selectedDocumentPreviewUrl}
+                        alt={
+                          selectedDocumentPreview.file_name || "Patient file"
+                        }
+                        className="w-full h-full object-contain"
+                      />
+                    ) : isPdfDocument(selectedDocumentPreview) ? (
+                      <iframe
+                        src={selectedDocumentPreviewUrl}
+                        title={
+                          selectedDocumentPreview.file_name ||
+                          "Document preview"
+                        }
+                        className="w-full h-full"
+                      />
+                    ) : (
+                      <p className="text-sm text-gray-400 px-4 text-center">
+                        This file type cannot be embedded. Use Open to view it.
+                      </p>
+                    )}
+                  </div>
+                </div>
               </div>
             </TabsContent>
           </Tabs>
 
           {/* Footer */}
-          <div className="flex-shrink-0 flex justify-end px-6 py-3 border-t border-gray-100">
+          <div className="flex-shrink-0 flex justify-end px-4 sm:px-6 py-3 border-t border-gray-100">
             <Button
               variant="outline"
               size="sm"
