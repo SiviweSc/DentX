@@ -8,14 +8,14 @@ import { Testimonials } from "./components/testimonials";
 import { Contact } from "./components/contact";
 import { Footer } from "./components/footer";
 import { BookingForm } from "./components/booking-form";
-import { AdminLogin } from "./components/admin-login";
 import { AdminDashboard } from "./components/admin-dashboard-new";
 import { DatabaseTest } from "./components/database-test";
+import { AccessPortal } from "./components/access-portal";
 import { Toaster } from "./components/ui/sonner";
 
 export default function App() {
   const [showBookingForm, setShowBookingForm] = useState(false);
-  const [showAdminLogin, setShowAdminLogin] = useState(false);
+  const [showAccessPortal, setShowAccessPortal] = useState(false);
   const [adminToken, setAdminToken] = useState<string | null>(null);
   const [showDatabaseTest, setShowDatabaseTest] = useState(false);
 
@@ -38,11 +38,13 @@ export default function App() {
   };
 
   const handleAdminLogin = () => {
-    setShowAdminLogin(true);
+    setShowAccessPortal(true);
+    window.scrollTo(0, 0);
   };
 
   const handleLoginSuccess = (token: string) => {
     setAdminToken(token);
+    setShowAccessPortal(false);
   };
 
   const handleAdminLogout = () => {
@@ -65,6 +67,19 @@ export default function App() {
     return (
       <>
         <DatabaseTest />
+        <Toaster />
+      </>
+    );
+  }
+
+  // Show access portal as full page
+  if (showAccessPortal) {
+    return (
+      <>
+        <AccessPortal
+          onClose={() => setShowAccessPortal(false)}
+          onLoginSuccess={handleLoginSuccess}
+        />
         <Toaster />
       </>
     );
@@ -93,11 +108,6 @@ export default function App() {
         <Contact />
         <Footer onAdminLogin={handleAdminLogin} />
       </div>
-      <AdminLogin
-        open={showAdminLogin}
-        onOpenChange={setShowAdminLogin}
-        onLoginSuccess={handleLoginSuccess}
-      />
       <Toaster />
     </>
   );
