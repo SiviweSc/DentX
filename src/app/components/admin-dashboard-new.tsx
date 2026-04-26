@@ -39,7 +39,10 @@ import {
   Pencil,
   Plus,
 } from "lucide-react";
-import { supabase } from "../../../utils/supabase/client";
+import {
+  supabase,
+  supabaseAdminApiBaseUrls,
+} from "../../../utils/supabase/client";
 import { format } from "date-fns";
 import { toast } from "sonner";
 import {
@@ -51,27 +54,96 @@ import {
   SERVICE_CATALOG,
   updateAvailabilityConfig,
 } from "../lib/availability";
+import {
+  getRoleLabel,
+  normalizeUserRole,
+  sanitizeRolePermissions,
+  type RoleDefinition,
+  type RolePermissions,
+  type UserRole,
+} from "../lib/roles";
 import logo from "../../assets/cadae8615ee9587c8f09fa141332814475e43e29.png";
 import { BookingCalendar } from "./booking-calendar";
 
 interface AdminDashboardProps {
   onClose: () => void;
   authToken: string;
+  currentUserName: string;
+  currentUserRole: UserRole;
+  currentUserRoleLabel?: string;
+  currentUserPermissions: RolePermissions;
 }
 
-export function AdminDashboard({ onClose, authToken }: AdminDashboardProps) {
+export function AdminDashboard({
+  onClose,
+  authToken,
+  currentUserName,
+  currentUserRole,
+  currentUserRoleLabel,
+  currentUserPermissions,
+}: AdminDashboardProps) {
   const [activeSection, setActiveSection] = useState("dashboard");
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const normalizedRole = normalizeUserRole(currentUserRole);
+  const permissions = sanitizeRolePermissions(currentUserPermissions);
 
   const menuItems = [
-    { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
-    { id: "calendar", label: "Calendar", icon: Calendar },
-    { id: "bookings", label: "Bookings", icon: CalendarIcon },
-    { id: "patients", label: "Patients", icon: Users },
-    { id: "practice", label: "Practice", icon: Building2 },
-    { id: "activity", label: "Activity Log", icon: ActivityIcon },
-    { id: "settings", label: "Settings", icon: ClipboardList },
+    {
+      id: "dashboard",
+      label: "Dashboard",
+      icon: LayoutDashboard,
+      visible: permissions.dashboard,
+    },
+    {
+      id: "calendar",
+      label: "Calendar",
+      icon: Calendar,
+      visible: permissions.calendar,
+    },
+    {
+      id: "bookings",
+      label: "Bookings",
+      icon: CalendarIcon,
+      visible: permissions.bookings,
+    },
+    {
+      id: "patients",
+      label: "Patients",
+      icon: Users,
+      visible: permissions.patients,
+    },
+    {
+      id: "practice",
+      label: "Practice",
+      icon: Building2,
+      visible: permissions.practice,
+    },
+    {
+      id: "activity",
+      label: "Activity Log",
+      icon: ActivityIcon,
+      visible: permissions.activity,
+    },
+    {
+      id: "settings",
+      label: "Settings",
+      icon: ClipboardList,
+      visible: permissions.settings,
+    },
+    {
+      id: "users",
+      label: "User Management",
+      icon: User,
+      visible: permissions.manageUsers,
+    },
   ];
+  const visibleMenuItems = menuItems.filter((item) => item.visible);
+
+  useEffect(() => {
+    if (!visibleMenuItems.some((item) => item.id === activeSection)) {
+      setActiveSection(visibleMenuItems[0]?.id || "dashboard");
+    }
+  }, [activeSection, visibleMenuItems]);
 
   const handleNavClick = (id: string) => {
     setActiveSection(id);
@@ -105,6 +177,7 @@ export function AdminDashboard({ onClose, authToken }: AdminDashboardProps) {
         <nav className="flex-1 overflow-y-auto p-4">
           <div className="space-y-1">
             {menuItems.map((item) => {
+              if (!item.visible) return null;
               const Icon = item.icon;
               return (
                 <button
@@ -146,28 +219,52 @@ export function AdminDashboard({ onClose, authToken }: AdminDashboardProps) {
               <Menu className="w-6 h-6" />
             </button>
             <h1 className="text-lg md:text-2xl font-bold text-gray-900">
-              {menuItems.find((item) => item.id === activeSection)?.label ||
-                "Dashboard"}
+              {visibleMenuItems.find((item) => item.id === activeSection)
+                ?.label || "Dashboard"}
             </h1>
           </div>
           <div className="flex items-center gap-4">
             <div className="text-xs md:text-sm text-gray-600">
-              Welcome, <span className="font-semibold">Admin</span>
+              Welcome, <span className="font-semibold">{currentUserName}</span>
+              <span className="ml-2 text-gray-400">
+                ({getRoleLabel(normalizedRole, currentUserRoleLabel)})
+              </span>
             </div>
           </div>
         </header>
 
         <main className="flex-1 overflow-y-auto p-4 md:p-8">
           {activeSection === "dashboard" && <DashboardContent />}
-          {activeSection === "calendar" && <BookingCalendar />}
-          {activeSection === "bookings" && <BookingsContent />}
+          {activeSection === "calendar" && (
+            <BookingCalendar
+              canConfirmBooking={permissions.bookingsConfirm}
+              canCompleteBooking={permissions.bookingsComplete}
+            />
+          )}
+          {activeSection === "bookings" && (
+            <BookingsContent
+              canConfirmBooking={permissions.bookingsConfirm}
+              canCompleteBooking={permissions.bookingsComplete}
+              currentUserName={currentUserName}
+              currentUserRole={normalizedRole}
+            />
+          )}
           {activeSection === "patients" && <PatientsContent />}
           {activeSection === "practice" && (
             <PracticeManagementContent authToken={authToken} />
           )}
           {activeSection === "activity" && <ActivityContent />}
           {activeSection === "settings" && (
-            <SettingsContent authToken={authToken} />
+            <SettingsContent
+              authToken={authToken}
+              canManageAvailability={permissions.manageAvailability}
+            />
+          )}
+          {activeSection === "users" && (
+            <UserManagementContent
+              authToken={authToken}
+              canManageUsers={permissions.manageUsers}
+            />
           )}
         </main>
       </div>
@@ -882,7 +979,17 @@ function WeeklyCalendar() {
   );
 }
 
-function BookingsContent() {
+function BookingsContent({
+  canConfirmBooking,
+  canCompleteBooking,
+  currentUserName,
+  currentUserRole,
+}: {
+  canConfirmBooking: boolean;
+  canCompleteBooking: boolean;
+  currentUserName: string;
+  currentUserRole: UserRole;
+}) {
   const [activeTab, setActiveTab] = useState("all");
   const [bookings, setBookings] = useState<any[]>([]);
   const [confirmedBookings, setConfirmedBookings] = useState<any[]>([]);
@@ -988,6 +1095,11 @@ function BookingsContent() {
   };
 
   const handleConfirm = async (booking: any) => {
+    if (!canConfirmBooking) {
+      toast.error("You do not have permission to confirm bookings");
+      return;
+    }
+
     try {
       const normalizePhone = (value: string) =>
         String(value || "")
@@ -1182,6 +1294,43 @@ function BookingsContent() {
     } catch (err) {
       toast.error("An error occurred");
       console.error(err);
+    }
+  };
+
+  const handleComplete = async (booking: any) => {
+    if (!canCompleteBooking) {
+      toast.error("Only doctors can complete bookings");
+      return;
+    }
+
+    try {
+      const { error: updateError } = await supabase
+        .from("bookings")
+        .update({
+          status: "completed",
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", booking.id);
+
+      if (updateError) {
+        toast.error("Failed to complete booking");
+        console.error(updateError);
+        return;
+      }
+
+      await supabase.from("activity_log").insert({
+        type: "booking_completed",
+        user_name: currentUserName,
+        user_role: currentUserRole,
+        description: `Booking completed for ${booking.first_name} ${booking.last_name}`,
+        booking_id: booking.id,
+      });
+
+      toast.success("Booking marked as completed");
+      fetchBookings();
+    } catch (err) {
+      toast.error("An error occurred");
+      console.error("Error in handleComplete:", err);
     }
   };
 
@@ -1388,7 +1537,7 @@ function BookingsContent() {
                   )}
 
                   <div className="mt-4 flex flex-wrap gap-2">
-                    {booking.status === "pending" && (
+                    {booking.status === "pending" && canConfirmBooking && (
                       <Button
                         size="sm"
                         variant="outline"
@@ -1396,6 +1545,16 @@ function BookingsContent() {
                         onClick={() => handleConfirm(booking)}
                       >
                         Confirm
+                      </Button>
+                    )}
+                    {booking.status === "confirmed" && canCompleteBooking && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="text-indigo-600 border-indigo-600 hover:bg-indigo-50 text-xs sm:text-sm"
+                        onClick={() => handleComplete(booking)}
+                      >
+                        Complete
                       </Button>
                     )}
                     <Button
@@ -3502,20 +3661,6 @@ function PracticeManagementContent({ authToken }: { authToken: string }) {
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         <Card>
           <CardHeader>
-            <CardTitle>Staff Management</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <p className="text-gray-500">
-              Manage practitioners and staff members
-            </p>
-            <Button className="mt-4 bg-[#9A7B1D] hover:bg-[#7d6418]">
-              Add Staff Member
-            </Button>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
             <CardTitle>Working Hours</CardTitle>
           </CardHeader>
           <CardContent>
@@ -3822,7 +3967,428 @@ function ActivityContent() {
   );
 }
 
-function SettingsContent({ authToken }: { authToken: string }) {
+function UserManagementPanel({ authToken }: { authToken: string }) {
+  const [users, setUsers] = useState<any[]>([]);
+  const [roleDefinitions, setRoleDefinitions] = useState<RoleDefinition[]>([]);
+  const [loadingUsers, setLoadingUsers] = useState(true);
+  const [savingUserId, setSavingUserId] = useState<number | null>(null);
+  const [savingRoleKey, setSavingRoleKey] = useState<string | null>(null);
+  const [creatingUser, setCreatingUser] = useState(false);
+  const [newUser, setNewUser] = useState({
+    username: "",
+    password: "",
+    role: "admin" as UserRole,
+  });
+
+  const apiFetchAuth = async (path: string, init?: RequestInit) => {
+    let lastResponse: Response | null = null;
+
+    for (const baseUrl of supabaseAdminApiBaseUrls) {
+      const response = await fetch(`${baseUrl}${path}`, {
+        ...init,
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Basic ${authToken}`,
+          ...(init?.headers || {}),
+        },
+      });
+
+      lastResponse = response;
+      if (response.status === 404) {
+        continue;
+      }
+
+      return response;
+    }
+
+    return lastResponse;
+  };
+
+  const loadUsers = async () => {
+    try {
+      setLoadingUsers(true);
+      const response = await apiFetchAuth(`/users`);
+
+      if (!response) {
+        toast.error("Could not load users");
+        return;
+      }
+
+      const data = await response.json();
+
+      if (!response.ok || !data.success) {
+        toast.error(data.error || "Could not load users");
+        return;
+      }
+
+      setUsers(data.users || []);
+    } catch (error) {
+      console.error("Failed to load users:", error);
+      toast.error("Could not load users");
+    } finally {
+      setLoadingUsers(false);
+    }
+  };
+
+  const loadRoles = async () => {
+    try {
+      const response = await apiFetchAuth(`/roles`);
+      if (!response) {
+        toast.error("Could not load roles");
+        return;
+      }
+
+      const data = await response.json();
+      if (!response.ok || !data.success) {
+        toast.error(data.error || "Could not load roles");
+        return;
+      }
+
+      const roles = (data.roles || []).map((role: any) => ({
+        role: normalizeUserRole(role.role),
+        label: role.label || getRoleLabel(role.role),
+        permissions: sanitizeRolePermissions(role.permissions),
+      }));
+
+      setRoleDefinitions(roles);
+
+      if (roles.length > 0) {
+        setNewUser((prev) => {
+          const exists = roles.some(
+            (role: RoleDefinition) => role.role === prev.role,
+          );
+          return exists ? prev : { ...prev, role: roles[0].role };
+        });
+      }
+    } catch (error) {
+      console.error("Failed to load roles:", error);
+      toast.error("Could not load roles");
+    }
+  };
+
+  const roleOptions = roleDefinitions.map((roleDefinition) => ({
+    value: roleDefinition.role,
+    label: roleDefinition.label,
+  }));
+
+  const permissionLabels: Array<{
+    key: keyof RolePermissions;
+    label: string;
+  }> = [
+    { key: "dashboard", label: "Access Dashboard" },
+    { key: "calendar", label: "Access Calendar" },
+    { key: "bookings", label: "Access Bookings" },
+    { key: "bookingsConfirm", label: "Confirm Bookings" },
+    { key: "bookingsComplete", label: "Complete Bookings" },
+    { key: "patients", label: "Access Patients" },
+    { key: "practice", label: "Access Practice" },
+    { key: "activity", label: "Access Activity Log" },
+    { key: "settings", label: "Access Settings" },
+    { key: "manageAvailability", label: "Manage Operating Hours" },
+    { key: "manageUsers", label: "Manage Users and Roles" },
+  ];
+
+  useEffect(() => {
+    loadUsers();
+    loadRoles();
+  }, []);
+
+  const handleRoleChange = async (userId: number, role: UserRole) => {
+    try {
+      setSavingUserId(userId);
+      const response = await apiFetchAuth(`/users/${userId}`, {
+        method: "PUT",
+        body: JSON.stringify({ role }),
+      });
+
+      if (!response) {
+        toast.error("Could not update role");
+        return;
+      }
+
+      const data = await response.json();
+      if (!response.ok || !data.success) {
+        toast.error(data.error || "Could not update role");
+        return;
+      }
+
+      toast.success("User role updated");
+      await loadUsers();
+    } catch (error) {
+      console.error("Failed to update role:", error);
+      toast.error("Could not update role");
+    } finally {
+      setSavingUserId(null);
+    }
+  };
+
+  const handleCreateUser = async () => {
+    if (!newUser.username.trim() || !newUser.password.trim()) {
+      toast.error("Username and password are required");
+      return;
+    }
+
+    try {
+      setCreatingUser(true);
+      const response = await apiFetchAuth(`/users`, {
+        method: "POST",
+        body: JSON.stringify({
+          username: newUser.username.trim(),
+          password: newUser.password,
+          role: newUser.role,
+        }),
+      });
+
+      if (!response) {
+        toast.error("Could not create user");
+        return;
+      }
+
+      const data = await response.json();
+      if (!response.ok || !data.success) {
+        toast.error(data.error || "Could not create user");
+        return;
+      }
+
+      toast.success("User created");
+      setNewUser((prev) => ({
+        username: "",
+        password: "",
+        role: roleOptions[0]?.value || prev.role,
+      }));
+      await loadUsers();
+    } catch (error) {
+      console.error("Failed to create user:", error);
+      toast.error("Could not create user");
+    } finally {
+      setCreatingUser(false);
+    }
+  };
+
+  const handleRolePermissionToggle = (
+    roleKey: string,
+    permissionKey: keyof RolePermissions,
+    enabled: boolean,
+  ) => {
+    setRoleDefinitions((prev) =>
+      prev.map((roleDefinition) =>
+        roleDefinition.role !== roleKey
+          ? roleDefinition
+          : {
+              ...roleDefinition,
+              permissions: {
+                ...roleDefinition.permissions,
+                [permissionKey]: enabled,
+              },
+            },
+      ),
+    );
+  };
+
+  const handleSaveRolePermissions = async (roleDefinition: RoleDefinition) => {
+    try {
+      setSavingRoleKey(roleDefinition.role);
+      const response = await apiFetchAuth(`/roles/${roleDefinition.role}`, {
+        method: "PUT",
+        body: JSON.stringify({ permissions: roleDefinition.permissions }),
+      });
+
+      if (!response) {
+        toast.error("Could not update role permissions");
+        return;
+      }
+
+      const data = await response.json();
+      if (!response.ok || !data.success) {
+        toast.error(data.error || "Could not update role permissions");
+        return;
+      }
+
+      toast.success(`${roleDefinition.label} permissions updated`);
+      await loadRoles();
+    } catch (error) {
+      console.error("Failed to update role permissions:", error);
+      toast.error("Could not update role permissions");
+    } finally {
+      setSavingRoleKey(null);
+    }
+  };
+
+  return (
+    <Card>
+      <CardHeader className="flex flex-row items-center justify-between">
+        <CardTitle>User Management</CardTitle>
+        <Button onClick={loadUsers} variant="outline" size="sm">
+          Refresh
+        </Button>
+      </CardHeader>
+      <CardContent className="space-y-5">
+        <div className="rounded-lg border border-gray-200 p-4">
+          <p className="text-sm font-medium text-gray-800 mb-3">Add User</p>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            <input
+              type="text"
+              value={newUser.username}
+              onChange={(e) =>
+                setNewUser((prev) => ({ ...prev, username: e.target.value }))
+              }
+              placeholder="Username"
+              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#9A7B1D]"
+            />
+            <input
+              type="password"
+              value={newUser.password}
+              onChange={(e) =>
+                setNewUser((prev) => ({ ...prev, password: e.target.value }))
+              }
+              placeholder="Password"
+              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#9A7B1D]"
+            />
+            <div className="flex items-center gap-2">
+              <select
+                value={newUser.role}
+                onChange={(e) =>
+                  setNewUser((prev) => ({
+                    ...prev,
+                    role: normalizeUserRole(e.target.value),
+                  }))
+                }
+                className="flex-1 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#9A7B1D]"
+              >
+                {roleOptions.map((roleOption) => (
+                  <option key={roleOption.value} value={roleOption.value}>
+                    {roleOption.label}
+                  </option>
+                ))}
+              </select>
+              <Button
+                onClick={handleCreateUser}
+                disabled={creatingUser}
+                className="bg-[#9A7B1D] hover:bg-[#7d6418] text-white"
+              >
+                {creatingUser ? "Adding..." : "Add"}
+              </Button>
+            </div>
+          </div>
+        </div>
+
+        {loadingUsers ? (
+          <p className="text-sm text-gray-500">Loading users...</p>
+        ) : users.length === 0 ? (
+          <p className="text-sm text-gray-500">No users found.</p>
+        ) : (
+          <div className="space-y-2">
+            {users.map((user) => (
+              <div
+                key={user.id}
+                className="rounded-lg border border-gray-200 p-3 flex flex-col md:flex-row gap-3 md:items-center md:justify-between"
+              >
+                <div>
+                  <p className="text-sm font-medium text-gray-900">
+                    {user.username}
+                  </p>
+                  <p className="text-xs text-gray-500">
+                    Last login:{" "}
+                    {user.last_login
+                      ? format(new Date(user.last_login), "d MMM yyyy HH:mm")
+                      : "Never"}
+                  </p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <select
+                    value={normalizeUserRole(user.role)}
+                    onChange={(e) =>
+                      void handleRoleChange(
+                        user.id,
+                        normalizeUserRole(e.target.value),
+                      )
+                    }
+                    disabled={savingUserId === user.id}
+                    className="px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#9A7B1D]"
+                  >
+                    {roleOptions.map((roleOption) => (
+                      <option key={roleOption.value} value={roleOption.value}>
+                        {roleOption.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <div className="rounded-lg border border-gray-200 p-4">
+          <p className="text-sm font-medium text-gray-800 mb-3">
+            Role Permissions
+          </p>
+          {roleDefinitions.length === 0 ? (
+            <p className="text-sm text-gray-500">No roles found.</p>
+          ) : (
+            <div className="space-y-4">
+              {roleDefinitions.map((roleDefinition) => (
+                <div
+                  key={roleDefinition.role}
+                  className="rounded-lg border border-gray-200 p-3"
+                >
+                  <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2 mb-3">
+                    <p className="text-sm font-semibold text-gray-900">
+                      {roleDefinition.label}
+                    </p>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={savingRoleKey === roleDefinition.role}
+                      onClick={() =>
+                        void handleSaveRolePermissions(roleDefinition)
+                      }
+                    >
+                      {savingRoleKey === roleDefinition.role
+                        ? "Saving..."
+                        : "Save Permissions"}
+                    </Button>
+                  </div>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                    {permissionLabels.map((permission) => (
+                      <label
+                        key={`${roleDefinition.role}-${permission.key}`}
+                        className="flex items-center gap-2 text-sm text-gray-700"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={
+                            roleDefinition.permissions[permission.key] === true
+                          }
+                          onChange={(event) =>
+                            handleRolePermissionToggle(
+                              roleDefinition.role,
+                              permission.key,
+                              event.target.checked,
+                            )
+                          }
+                          className="h-4 w-4 rounded border-gray-300 text-[#9A7B1D] focus:ring-[#9A7B1D]"
+                        />
+                        <span>{permission.label}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function SettingsContent({
+  authToken,
+  canManageAvailability,
+}: {
+  authToken: string;
+  canManageAvailability: boolean;
+}) {
   return (
     <div className="space-y-6">
       <Card>
@@ -3831,12 +4397,53 @@ function SettingsContent({ authToken }: { authToken: string }) {
         </CardHeader>
         <CardContent>
           <p className="text-gray-500">
-            Configure operating hours, services, and practitioners that can be
-            booked across the frontend.
+            Manage operational settings and role-based access for staff users.
           </p>
         </CardContent>
       </Card>
-      <AvailabilitySettingsPanel authToken={authToken} />
+
+      {canManageAvailability ? (
+        <AvailabilitySettingsPanel authToken={authToken} />
+      ) : (
+        <Card>
+          <CardContent className="pt-6 text-sm text-gray-500">
+            You do not have permission to manage availability settings.
+          </CardContent>
+        </Card>
+      )}
+    </div>
+  );
+}
+
+function UserManagementContent({
+  authToken,
+  canManageUsers,
+}: {
+  authToken: string;
+  canManageUsers: boolean;
+}) {
+  return (
+    <div className="space-y-6">
+      <Card>
+        <CardHeader>
+          <CardTitle>User Management</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <p className="text-gray-500">
+            Manage staff access, roles, and account permissions.
+          </p>
+        </CardContent>
+      </Card>
+
+      {canManageUsers ? (
+        <UserManagementPanel authToken={authToken} />
+      ) : (
+        <Card>
+          <CardContent className="pt-6 text-sm text-gray-500">
+            User management is restricted to Doctors and Practice Managers.
+          </CardContent>
+        </Card>
+      )}
     </div>
   );
 }

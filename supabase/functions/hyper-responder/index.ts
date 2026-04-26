@@ -29,6 +29,120 @@ const getSupabaseClient = () => {
   );
 };
 
+const EMPTY_ROLE_PERMISSIONS = {
+  dashboard: false,
+  calendar: false,
+  bookings: false,
+  bookingsConfirm: false,
+  patients: false,
+  practice: false,
+  activity: false,
+  settings: false,
+  bookingsComplete: false,
+  manageUsers: false,
+  manageAvailability: false,
+};
+
+const PERMISSION_KEY_MAP: Record<string, string> = {
+  "bookings.confirm": "bookingsConfirm",
+  "bookings.complete": "bookingsComplete",
+  "settings.availability": "manageAvailability",
+  "users.manage": "manageUsers",
+};
+
+const normalizeRoleValue = (role: string | null | undefined) => {
+  const normalized = String(role || "")
+    .trim()
+    .toLowerCase();
+  return normalized || "admin";
+};
+
+const sanitizeRolePermissions = (value: unknown) => {
+  const source =
+    value && typeof value === "object"
+      ? (value as Record<string, unknown>)
+      : {};
+
+  return {
+    ...EMPTY_ROLE_PERMISSIONS,
+    dashboard: source.dashboard === true,
+    calendar: source.calendar === true,
+    bookings: source.bookings === true,
+    bookingsConfirm: source.bookingsConfirm === true,
+    patients: source.patients === true,
+    practice: source.practice === true,
+    activity: source.activity === true,
+    settings: source.settings === true,
+    bookingsComplete: source.bookingsComplete === true,
+    manageUsers: source.manageUsers === true,
+    manageAvailability: source.manageAvailability === true,
+  };
+};
+
+const getRoleDefinition = async (
+  supabase: ReturnType<typeof getSupabaseClient>,
+  role: string | null | undefined,
+) => {
+  const normalizedRole = normalizeRoleValue(role);
+
+  const { data } = await supabase
+    .from("role_definitions")
+    .select("role, label, permissions")
+    .eq("role", normalizedRole)
+    .maybeSingle();
+
+  if (data) {
+    return {
+      role: data.role,
+      roleLabel: data.label || data.role,
+      permissions: sanitizeRolePermissions(data.permissions),
+    };
+  }
+
+  const { data: fallbackData } = await supabase
+    .from("role_definitions")
+    .select("role, label, permissions")
+    .eq("role", "admin")
+    .maybeSingle();
+
+  if (fallbackData) {
+    return {
+      role: fallbackData.role,
+      roleLabel: fallbackData.label || fallbackData.role,
+      permissions: sanitizeRolePermissions(fallbackData.permissions),
+    };
+  }
+
+  return {
+    role: normalizedRole,
+    roleLabel: normalizedRole,
+    permissions: sanitizeRolePermissions(null),
+  };
+};
+
+const hasPermission = (
+  permissions: Record<string, boolean>,
+  permission: string,
+) => {
+  const mappedPermission = PERMISSION_KEY_MAP[permission] || permission;
+  return (
+    permissions[mappedPermission] === true || permissions[permission] === true
+  );
+};
+
+const isValidRole = async (
+  supabase: ReturnType<typeof getSupabaseClient>,
+  role: string,
+) => {
+  const { data } = await supabase
+    .from("role_definitions")
+    .select("role")
+    .eq("role", normalizeRoleValue(role))
+    .maybeSingle();
+
+  return Boolean(data?.role);
+};
+
 // Middleware to check admin authentication
 const requireAuth = async (c: any, next: any) => {
   const authHeader = c.req.header("Authorization");
@@ -51,11 +165,35 @@ const requireAuth = async (c: any, next: any) => {
       return c.json({ error: "Invalid credentials" }, 401);
     }
 
-    c.set("user", data);
+    const roleDefinition = await getRoleDefinition(supabase, data.role);
+
+    c.set("user", {
+      ...data,
+      role: roleDefinition.role,
+      roleLabel: roleDefinition.roleLabel,
+      permissions: roleDefinition.permissions,
+    });
     await next();
   } catch (e) {
     return c.json({ error: "Invalid authorization header" }, 401);
   }
+};
+
+const requirePermission = (permission: string) => {
+  return async (c: any, next: any) => {
+    const user = c.get("user");
+    if (!hasPermission(user?.permissions || {}, permission)) {
+      return c.json(
+        {
+          error: "Forbidden",
+          detail: `Role '${normalizeRoleValue(user?.role)}' lacks permission '${permission}'`,
+        },
+        403,
+      );
+    }
+
+    await next();
+  };
 };
 
 const DEFAULT_AVAILABILITY_CONFIG = {
@@ -417,21 +555,26 @@ app.get("/make-server-34100c2d/availability", async (c) => {
   }
 });
 
-app.put("/make-server-34100c2d/availability", requireAuth, async (c) => {
-  try {
-    const { config } = await c.req.json();
-    const normalizedConfig = normalizeAvailabilityConfig(config);
+app.put(
+  "/make-server-34100c2d/availability",
+  requireAuth,
+  requirePermission("settings.availability"),
+  async (c) => {
+    try {
+      const { config } = await c.req.json();
+      const normalizedConfig = normalizeAvailabilityConfig(config);
 
-    const supabase = getSupabaseClient();
-    const serviceRows = Object.entries(normalizedConfig.services).map(
-      ([serviceId, serviceConfig]: any) => ({
-        service_id: serviceId,
-        enabled: serviceConfig.enabled,
-      }),
-    );
+      const supabase = getSupabaseClient();
+      const serviceRows = Object.entries(normalizedConfig.services).map(
+        ([serviceId, serviceConfig]: any) => ({
+          service_id: serviceId,
+          enabled: serviceConfig.enabled,
+        }),
+      );
 
-    const practitionerRows = Object.entries(normalizedConfig.services).flatMap(
-      ([serviceId, serviceConfig]: any) =>
+      const practitionerRows = Object.entries(
+        normalizedConfig.services,
+      ).flatMap(([serviceId, serviceConfig]: any) =>
         Object.entries(serviceConfig.practitioners).map(
           ([practitionerId, enabled]) => ({
             service_id: serviceId,
@@ -439,52 +582,53 @@ app.put("/make-server-34100c2d/availability", requireAuth, async (c) => {
             enabled,
           }),
         ),
-    );
+      );
 
-    const operatingHoursRows = Object.entries(
-      normalizedConfig.operatingHours,
-    ).map(([dayKey, dayConfig]: any) => ({
-      day_of_week: DAY_INDEX_TO_KEY.indexOf(dayKey),
-      enabled: dayConfig.enabled,
-      start_time: dayConfig.start,
-      end_time: dayConfig.end,
-    }));
+      const operatingHoursRows = Object.entries(
+        normalizedConfig.operatingHours,
+      ).map(([dayKey, dayConfig]: any) => ({
+        day_of_week: DAY_INDEX_TO_KEY.indexOf(dayKey),
+        enabled: dayConfig.enabled,
+        start_time: dayConfig.start,
+        end_time: dayConfig.end,
+      }));
 
-    const { error: servicesError } = await supabase
-      .from("service_availability")
-      .upsert(serviceRows, { onConflict: "service_id" });
+      const { error: servicesError } = await supabase
+        .from("service_availability")
+        .upsert(serviceRows, { onConflict: "service_id" });
 
-    if (servicesError) {
-      throw servicesError;
+      if (servicesError) {
+        throw servicesError;
+      }
+
+      const { error: practitionersError } = await supabase
+        .from("practitioner_availability")
+        .upsert(practitionerRows, {
+          onConflict: "service_id,practitioner_id",
+        });
+
+      if (practitionersError) {
+        throw practitionersError;
+      }
+
+      const { error: operatingHoursError } = await supabase
+        .from("operating_hours")
+        .upsert(operatingHoursRows, { onConflict: "day_of_week" });
+
+      if (operatingHoursError) {
+        throw operatingHoursError;
+      }
+
+      return c.json({ success: true, config: normalizedConfig });
+    } catch (error) {
+      console.error("Availability update error:", error);
+      return c.json(
+        { error: "Failed to update availability: " + error.message },
+        500,
+      );
     }
-
-    const { error: practitionersError } = await supabase
-      .from("practitioner_availability")
-      .upsert(practitionerRows, {
-        onConflict: "service_id,practitioner_id",
-      });
-
-    if (practitionersError) {
-      throw practitionersError;
-    }
-
-    const { error: operatingHoursError } = await supabase
-      .from("operating_hours")
-      .upsert(operatingHoursRows, { onConflict: "day_of_week" });
-
-    if (operatingHoursError) {
-      throw operatingHoursError;
-    }
-
-    return c.json({ success: true, config: normalizedConfig });
-  } catch (error) {
-    console.error("Availability update error:", error);
-    return c.json(
-      { error: "Failed to update availability: " + error.message },
-      500,
-    );
-  }
-});
+  },
+);
 
 // Admin login endpoint
 app.post("/make-server-34100c2d/auth/login", async (c) => {
@@ -555,9 +699,12 @@ app.post("/make-server-34100c2d/auth/login", async (c) => {
       .eq("id", data.id);
 
     // Log activity
+    const roleDefinition = await getRoleDefinition(supabase, data.role);
+
     await supabase.from("activity_log").insert({
       type: "login",
       user_name: username,
+      user_role: roleDefinition.role,
       description: "Admin logged in successfully",
     });
 
@@ -567,7 +714,9 @@ app.post("/make-server-34100c2d/auth/login", async (c) => {
       success: true,
       user: {
         username: data.username,
-        role: data.role,
+        role: roleDefinition.role,
+        roleLabel: roleDefinition.roleLabel,
+        permissions: roleDefinition.permissions,
       },
       token: btoa(`${username}:${password}`),
     });
@@ -726,6 +875,31 @@ app.put("/make-server-34100c2d/bookings/:id", requireAuth, async (c) => {
   try {
     const bookingId = c.req.param("id");
     const updates = await c.req.json();
+    const user = c.get("user");
+
+    if (updates?.status === "confirmed") {
+      if (!hasPermission(user?.permissions || {}, "bookings.confirm")) {
+        return c.json(
+          {
+            error: "Forbidden",
+            detail: "You do not have permission to confirm bookings",
+          },
+          403,
+        );
+      }
+    }
+
+    if (updates?.status === "completed") {
+      if (!hasPermission(user?.permissions || {}, "bookings.complete")) {
+        return c.json(
+          {
+            error: "Forbidden",
+            detail: "Only users with Doctor role can complete bookings",
+          },
+          403,
+        );
+      }
+    }
 
     const supabase = getSupabaseClient();
 
@@ -761,7 +935,8 @@ app.put("/make-server-34100c2d/bookings/:id", requireAuth, async (c) => {
     // Log activity
     await supabase.from("activity_log").insert({
       type: "booking_updated",
-      user_name: "Admin",
+      user_name: user?.username || "Admin",
+      user_role: normalizeRoleValue(user?.role),
       description: `Booking ${bookingId} updated - Status: ${updates.status || "updated"}`,
       booking_id: bookingId,
     });
@@ -779,6 +954,7 @@ app.delete("/make-server-34100c2d/bookings/:id", requireAuth, async (c) => {
     const bookingId = c.req.param("id");
 
     const supabase = getSupabaseClient();
+    const user = c.get("user");
 
     // Get booking details before deleting
     const { data: booking } = await supabase
@@ -804,7 +980,8 @@ app.delete("/make-server-34100c2d/bookings/:id", requireAuth, async (c) => {
     // Log activity
     await supabase.from("activity_log").insert({
       type: "booking_deleted",
-      user_name: "Admin",
+      user_name: user?.username || "Admin",
+      user_role: normalizeRoleValue(user?.role),
       description: `Booking deleted for ${booking.first_name} ${booking.last_name}`,
       booking_id: bookingId,
     });
@@ -815,6 +992,218 @@ app.delete("/make-server-34100c2d/bookings/:id", requireAuth, async (c) => {
     return c.json({ error: "Failed to delete booking: " + error.message }, 500);
   }
 });
+
+// User management
+app.get("/make-server-34100c2d/roles", requireAuth, async (c) => {
+  try {
+    const supabase = getSupabaseClient();
+    const { data, error } = await supabase
+      .from("role_definitions")
+      .select("role, label, permissions")
+      .order("label", { ascending: true });
+
+    if (error) {
+      throw error;
+    }
+
+    return c.json({
+      success: true,
+      roles: (data || []).map((roleDefinition) => ({
+        role: roleDefinition.role,
+        label: roleDefinition.label || roleDefinition.role,
+        permissions: sanitizeRolePermissions(roleDefinition.permissions),
+      })),
+    });
+  } catch (error) {
+    console.error("Get roles error:", error);
+    return c.json({ error: "Failed to fetch roles: " + error.message }, 500);
+  }
+});
+
+app.get(
+  "/make-server-34100c2d/users",
+  requireAuth,
+  requirePermission("users.manage"),
+  async (c) => {
+    try {
+      const supabase = getSupabaseClient();
+      const [
+        { data: users, error: usersError },
+        { data: roles, error: rolesError },
+      ] = await Promise.all([
+        supabase
+          .from("admin_users")
+          .select("id, username, role, created_at, last_login")
+          .order("created_at", { ascending: false }),
+        supabase.from("role_definitions").select("role, label"),
+      ]);
+
+      if (usersError) {
+        throw usersError;
+      }
+
+      if (rolesError) {
+        throw rolesError;
+      }
+
+      const roleLabelByKey = new Map(
+        (roles || []).map((roleDefinition) => [
+          String(roleDefinition.role || "").toLowerCase(),
+          roleDefinition.label || roleDefinition.role,
+        ]),
+      );
+
+      return c.json({
+        success: true,
+        users: (users || []).map((record) => {
+          const normalizedRole = normalizeRoleValue(record.role);
+          return {
+            ...record,
+            role: normalizedRole,
+            roleLabel: roleLabelByKey.get(normalizedRole) || normalizedRole,
+          };
+        }),
+      });
+    } catch (error) {
+      console.error("Get users error:", error);
+      return c.json({ error: "Failed to fetch users: " + error.message }, 500);
+    }
+  },
+);
+
+app.post(
+  "/make-server-34100c2d/users",
+  requireAuth,
+  requirePermission("users.manage"),
+  async (c) => {
+    try {
+      const { username, password, role } = await c.req.json();
+      if (!username || !password) {
+        return c.json({ error: "Username and password are required" }, 400);
+      }
+
+      if (!role) {
+        return c.json({ error: "Role is required" }, 400);
+      }
+
+      const supabase = getSupabaseClient();
+      const normalizedRole = normalizeRoleValue(role);
+      const roleExists = await isValidRole(supabase, normalizedRole);
+
+      if (!roleExists) {
+        return c.json({ error: "Invalid role selected" }, 400);
+      }
+
+      const { error } = await supabase.from("admin_users").insert({
+        username,
+        password_hash: password,
+        role: normalizedRole,
+      });
+
+      if (error) {
+        throw error;
+      }
+
+      return c.json({ success: true });
+    } catch (error) {
+      console.error("Create user error:", error);
+      return c.json({ error: "Failed to create user: " + error.message }, 500);
+    }
+  },
+);
+
+app.put(
+  "/make-server-34100c2d/roles/:role",
+  requireAuth,
+  requirePermission("users.manage"),
+  async (c) => {
+    try {
+      const roleKey = normalizeRoleValue(c.req.param("role"));
+      const { permissions } = await c.req.json();
+
+      const supabase = getSupabaseClient();
+      const roleDefinition = await getRoleDefinition(supabase, roleKey);
+
+      if (normalizeRoleValue(roleDefinition.role) !== roleKey) {
+        return c.json({ error: "Role not found" }, 404);
+      }
+
+      const normalizedPermissions = sanitizeRolePermissions(permissions);
+
+      const { error } = await supabase
+        .from("role_definitions")
+        .update({
+          permissions: normalizedPermissions,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("role", roleKey);
+
+      if (error) {
+        throw error;
+      }
+
+      return c.json({
+        success: true,
+        role: {
+          role: roleKey,
+          permissions: normalizedPermissions,
+        },
+      });
+    } catch (error) {
+      console.error("Update role permissions error:", error);
+      return c.json(
+        { error: "Failed to update role permissions: " + error.message },
+        500,
+      );
+    }
+  },
+);
+
+app.put(
+  "/make-server-34100c2d/users/:id",
+  requireAuth,
+  requirePermission("users.manage"),
+  async (c) => {
+    try {
+      const userId = c.req.param("id");
+      const { role, password } = await c.req.json();
+      const updates: any = {};
+      const supabase = getSupabaseClient();
+
+      if (role) {
+        const normalizedRole = normalizeRoleValue(role);
+        const roleExists = await isValidRole(supabase, normalizedRole);
+        if (!roleExists) {
+          return c.json({ error: "Invalid role selected" }, 400);
+        }
+
+        updates.role = normalizedRole;
+      }
+
+      if (password) {
+        updates.password_hash = password;
+      }
+
+      if (Object.keys(updates).length === 0) {
+        return c.json({ error: "No updates provided" }, 400);
+      }
+
+      const { error } = await supabase
+        .from("admin_users")
+        .update(updates)
+        .eq("id", Number(userId));
+
+      if (error) {
+        throw error;
+      }
+
+      return c.json({ success: true });
+    } catch (error) {
+      console.error("Update user error:", error);
+      return c.json({ error: "Failed to update user: " + error.message }, 500);
+    }
+  },
+);
 
 // Get all patients
 app.get("/make-server-34100c2d/patients", requireAuth, async (c) => {

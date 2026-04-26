@@ -12,11 +12,25 @@ import { AdminDashboard } from "./components/admin-dashboard-new";
 import { DatabaseTest } from "./components/database-test";
 import { AccessPortal } from "./components/access-portal";
 import { Toaster } from "./components/ui/sonner";
+import {
+  normalizeUserRole,
+  sanitizeRolePermissions,
+  type RolePermissions,
+  type UserRole,
+} from "./lib/roles";
+
+interface AdminSession {
+  token: string;
+  username: string;
+  role: UserRole;
+  roleLabel: string;
+  permissions: RolePermissions;
+}
 
 export default function App() {
   const [showBookingForm, setShowBookingForm] = useState(false);
   const [showAccessPortal, setShowAccessPortal] = useState(false);
-  const [adminToken, setAdminToken] = useState<string | null>(null);
+  const [adminSession, setAdminSession] = useState<AdminSession | null>(null);
   const [showDatabaseTest, setShowDatabaseTest] = useState(false);
 
   // Check for ?test-db URL parameter
@@ -42,21 +56,41 @@ export default function App() {
     window.scrollTo(0, 0);
   };
 
-  const handleLoginSuccess = (token: string) => {
-    setAdminToken(token);
+  const handleLoginSuccess = (session: {
+    token: string;
+    username: string;
+    role: UserRole;
+    roleLabel?: string;
+    permissions?: Partial<RolePermissions>;
+  }) => {
+    const normalizedRole = normalizeUserRole(session.role);
+    setAdminSession({
+      token: session.token,
+      username: session.username,
+      role: normalizedRole,
+      roleLabel: session.roleLabel || normalizedRole,
+      permissions: sanitizeRolePermissions(session.permissions),
+    });
     setShowAccessPortal(false);
   };
 
   const handleAdminLogout = () => {
-    setAdminToken(null);
+    setAdminSession(null);
     window.scrollTo(0, 0);
   };
 
   // Show admin dashboard if logged in
-  if (adminToken) {
+  if (adminSession) {
     return (
       <>
-        <AdminDashboard onClose={handleAdminLogout} authToken={adminToken} />
+        <AdminDashboard
+          onClose={handleAdminLogout}
+          authToken={adminSession.token}
+          currentUserName={adminSession.username}
+          currentUserRole={adminSession.role}
+          currentUserRoleLabel={adminSession.roleLabel}
+          currentUserPermissions={adminSession.permissions}
+        />
         <Toaster />
       </>
     );

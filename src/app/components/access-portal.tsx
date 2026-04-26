@@ -21,6 +21,12 @@ import { Button } from "./ui/button";
 import { Calendar } from "./ui/calendar";
 import { Input } from "./ui/input";
 import { Label } from "./ui/label";
+import {
+  normalizeUserRole,
+  sanitizeRolePermissions,
+  type RolePermissions,
+  type UserRole,
+} from "../lib/roles";
 
 type PortalScreen =
   | "select-role"
@@ -38,7 +44,13 @@ type WalkInSource = "walk-in-existing" | "walk-in-new";
 
 interface AccessPortalProps {
   onClose: () => void;
-  onLoginSuccess: (token: string) => void;
+  onLoginSuccess: (session: {
+    token: string;
+    username: string;
+    role: UserRole;
+    roleLabel?: string;
+    permissions?: Partial<RolePermissions>;
+  }) => void;
 }
 
 interface PatientSearchResult {
@@ -413,7 +425,13 @@ function AccessPortalContent({ onClose, onLoginSuccess }: AccessPortalProps) {
 
       if (response.ok && data.success && data.token) {
         toast.success("Login successful!");
-        onLoginSuccess(data.token);
+        onLoginSuccess({
+          token: data.token,
+          username: data?.user?.username || username,
+          role: normalizeUserRole(data?.user?.role),
+          roleLabel: data?.user?.roleLabel,
+          permissions: sanitizeRolePermissions(data?.user?.permissions),
+        });
         return;
       }
 

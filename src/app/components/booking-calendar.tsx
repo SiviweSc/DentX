@@ -100,6 +100,8 @@ const INITIAL_CREATE_FORM: CreateBookingForm = {
 
 interface BookingCalendarProps {
   onClose?: () => void;
+  canConfirmBooking?: boolean;
+  canCompleteBooking?: boolean;
 }
 
 function toLocalDateString(date: Date) {
@@ -140,7 +142,11 @@ function CalendarEventContent({ event }: { event: BookingEvent }) {
   );
 }
 
-export function BookingCalendar({ onClose: _onClose }: BookingCalendarProps) {
+export function BookingCalendar({
+  onClose: _onClose,
+  canConfirmBooking = false,
+  canCompleteBooking = false,
+}: BookingCalendarProps) {
   const [events, setEvents] = useState<BookingEvent[]>([]);
   const [loading, setLoading] = useState(true);
   const [availabilityConfig, setAvailabilityConfig] = useState(
@@ -494,6 +500,11 @@ export function BookingCalendar({ onClose: _onClose }: BookingCalendarProps) {
   const handleConfirmBooking = async () => {
     if (!selectedBooking) return;
 
+    if (!canConfirmBooking) {
+      toast.error("You do not have permission to confirm bookings");
+      return;
+    }
+
     try {
       const { error } = await supabase
         .from("bookings")
@@ -517,6 +528,11 @@ export function BookingCalendar({ onClose: _onClose }: BookingCalendarProps) {
 
   const handleCompleteBooking = async () => {
     if (!selectedBooking) return;
+
+    if (!canCompleteBooking) {
+      toast.error("You do not have permission to complete bookings");
+      return;
+    }
 
     try {
       const { error } = await supabase
@@ -1089,24 +1105,26 @@ export function BookingCalendar({ onClose: _onClose }: BookingCalendarProps) {
 
               <div className="flex flex-col gap-2 pt-4">
                 <div className="flex gap-2">
-                  {selectedBooking.status === "pending" && (
-                    <Button
-                      onClick={handleConfirmBooking}
-                      className="flex-1 bg-green-600 hover:bg-green-700 text-xs sm:text-sm"
-                    >
-                      <Check className="w-3 h-3 sm:w-4 sm:h-4 mr-1" />
-                      Confirm
-                    </Button>
-                  )}
-                  {selectedBooking.status === "confirmed" && (
-                    <Button
-                      onClick={handleCompleteBooking}
-                      className="flex-1 bg-indigo-600 hover:bg-indigo-700 text-xs sm:text-sm"
-                    >
-                      <Check className="w-3 h-3 sm:w-4 sm:h-4 mr-1" />
-                      Mark Complete
-                    </Button>
-                  )}
+                  {selectedBooking.status === "pending" &&
+                    canConfirmBooking && (
+                      <Button
+                        onClick={handleConfirmBooking}
+                        className="flex-1 bg-green-600 hover:bg-green-700 text-xs sm:text-sm"
+                      >
+                        <Check className="w-3 h-3 sm:w-4 sm:h-4 mr-1" />
+                        Confirm
+                      </Button>
+                    )}
+                  {selectedBooking.status === "confirmed" &&
+                    canCompleteBooking && (
+                      <Button
+                        onClick={handleCompleteBooking}
+                        className="flex-1 bg-indigo-600 hover:bg-indigo-700 text-xs sm:text-sm"
+                      >
+                        <Check className="w-3 h-3 sm:w-4 sm:h-4 mr-1" />
+                        Mark Complete
+                      </Button>
+                    )}
                   {(selectedBooking.status === "pending" ||
                     selectedBooking.status === "confirmed") && (
                     <Button
