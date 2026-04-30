@@ -3,6 +3,7 @@ import { format } from "date-fns";
 import {
   ArrowLeft,
   CheckCircle,
+  FileText,
   Lock,
   Search,
   User,
@@ -44,6 +45,7 @@ type PortalScreen =
   | "admin-login"
   | "walkin-type"
   | "online-checkin"
+  | "medical-form-search"
   | "medical-intake"
   | "returning-search"
   | "returning-service"
@@ -54,6 +56,12 @@ type PortalScreen =
   | "confirm-booking";
 
 type WalkInSource = "walk-in-existing" | "walk-in-new";
+type MedicalFormOrigin =
+  | "select-role"
+  | "walkin-type"
+  | "returning-search"
+  | "new-details";
+type MedicalIntakeOrigin = "online-checkin" | "medical-form-search";
 
 interface AccessPortalProps {
   onClose: () => void;
@@ -92,6 +100,7 @@ interface MedicalIntakeContextData {
   bookingId: string;
   patientName: string;
   initialData: Partial<MedicalIntakeData>;
+  previousForm?: any;
 }
 
 const EMPTY_WALKIN_DETAILS: WalkInDetails = {
@@ -169,6 +178,12 @@ function AccessPortalContent({ onClose, onLoginSuccess }: AccessPortalProps) {
   const [checkinPhone, setCheckinPhone] = useState("");
   const [checkinId, setCheckinId] = useState("");
   const [checkinLoading, setCheckinLoading] = useState(false);
+  const [formLookupQuery, setFormLookupQuery] = useState("");
+  const [formLookupLoading, setFormLookupLoading] = useState(false);
+  const [medicalFormOrigin, setMedicalFormOrigin] =
+    useState<MedicalFormOrigin>("walkin-type");
+  const [medicalIntakeOrigin, setMedicalIntakeOrigin] =
+    useState<MedicalIntakeOrigin>("medical-form-search");
   const [medicalIntakeContext, setMedicalIntakeContext] =
     useState<MedicalIntakeContextData | null>(null);
 
@@ -636,7 +651,9 @@ function AccessPortalContent({ onClose, onLoginSuccess }: AccessPortalProps) {
       }
 
       await parseApiResponse(response, "Create booking endpoint");
-      toast.success("Walk-in slot booked successfully");
+      toast.success(
+        "Walk-in slot booked. Admin must confirm the booking before the form can be filled.",
+      );
 
       setSearchTerm("");
       setSearchResults([]);
@@ -695,6 +712,7 @@ function AccessPortalContent({ onClose, onLoginSuccess }: AccessPortalProps) {
       });
 
       toast.success("Check-in successful");
+      setMedicalIntakeOrigin("online-checkin");
       setScreen("medical-intake");
     } catch (error) {
       console.error("Check-in failed:", error);
@@ -732,7 +750,95 @@ function AccessPortalContent({ onClose, onLoginSuccess }: AccessPortalProps) {
     setMedicalIntakeContext(null);
     setCheckinPhone("");
     setCheckinId("");
-    setScreen("online-checkin");
+    setFormLookupQuery("");
+    setScreen("walkin-type");
+  };
+
+  const handleMedicalFormLookup = async () => {
+    const query = formLookupQuery.trim();
+
+    if (!query) {
+      toast.error("Enter phone number or ID number");
+      return;
+    }
+
+    try {
+      setFormLookupLoading(true);
+
+      const response = await apiFetchPublic(`/medical-intake/lookup`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ query }),
+      });
+
+      if (!response) {
+        throw new Error("No response from medical form lookup endpoint");
+      }
+
+      const data = await parseApiResponse(
+        response,
+        "Medical form lookup endpoint",
+      );
+
+      if (!data?.canFill || !data?.booking) {
+        toast.error(
+          data?.message ||
+            "No confirmed booking found. Admin must confirm the booking first.",
+        );
+        return;
+      }
+
+      const booking = data.booking;
+      const previousForm = data.previousForm || null;
+      const previousPayload = previousForm?.form_payload || {};
+      const patientName =
+        `${booking?.first_name || ""} ${booking?.last_name || ""}`.trim() ||
+        "Patient";
+
+      setMedicalIntakeContext({
+        bookingId: String(booking?.id || ""),
+        patientName,
+        previousForm,
+        initialData: {
+          patient_first_name:
+            previousPayload.patient_first_name || booking?.first_name || "",
+          patient_surname:
+            previousPayload.patient_surname || booking?.last_name || "",
+          patient_cell: previousPayload.patient_cell || booking?.phone || "",
+          patient_email: previousPayload.patient_email || booking?.email || "",
+          patient_id_number:
+            previousPayload.patient_id_number || booking?.id_number || "",
+          medical_aid_name:
+            previousPayload.medical_aid_name || booking?.medical_aid || "",
+          medical_aid_number:
+            previousPayload.medical_aid_number ||
+            booking?.medical_aid_number ||
+            "",
+        },
+      });
+
+      if (previousForm) {
+        toast.success(
+          "Previous medical form found. You can review and update it.",
+        );
+      } else {
+        toast.success("Booking confirmed. Please complete the medical form.");
+      }
+
+      setMedicalIntakeOrigin("medical-form-search");
+      setScreen("medical-intake");
+    } catch (error) {
+      console.error("Medical form lookup failed:", error);
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "Could not check booking status",
+      );
+    } finally {
+      setFormLookupLoading(false);
+    }
   };
 
   const renderTopBar = () => (
@@ -751,6 +857,11 @@ function AccessPortalContent({ onClose, onLoginSuccess }: AccessPortalProps) {
               screen === "online-checkin"
             ) {
               setScreen("select-role");
+              return;
+            }
+
+            if (screen === "medical-form-search") {
+              setScreen(medicalFormOrigin);
               return;
             }
 
@@ -781,7 +892,7 @@ function AccessPortalContent({ onClose, onLoginSuccess }: AccessPortalProps) {
 
             if (screen === "medical-intake") {
               setMedicalIntakeContext(null);
-              setScreen("online-checkin");
+              setScreen(medicalIntakeOrigin);
               return;
             }
 
@@ -800,7 +911,7 @@ function AccessPortalContent({ onClose, onLoginSuccess }: AccessPortalProps) {
           <span className="text-sm">Back</span>
         </button>
 
-        <img src={logo} alt="DentX Quarters" className="h-10 sm:h-12" />
+        <img src={logo} alt="DentX Quarters" className="h-12 sm:h-14" />
 
         <button
           onClick={onClose}
@@ -970,10 +1081,10 @@ function AccessPortalContent({ onClose, onLoginSuccess }: AccessPortalProps) {
             Welcome to DentX Access Portal
           </h1>
           <p className="text-center text-gray-500 mb-8">
-            Continue as admin or as a walk-in client
+            Continue as admin, walk-in client, or online check-in
           </p>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <button
               type="button"
               onClick={() => setScreen("admin-login")}
@@ -997,7 +1108,35 @@ function AccessPortalContent({ onClose, onLoginSuccess }: AccessPortalProps) {
                 Book a slot for returning or new walk-in patients.
               </p>
             </button>
+            <button
+              type="button"
+              onClick={() => {
+                setCheckinPhone("");
+                setCheckinId("");
+                setMedicalIntakeContext(null);
+                setMedicalIntakeOrigin("online-checkin");
+                setScreen("online-checkin");
+              }}
+              className="rounded-xl border border-gray-200 bg-white p-6 text-left hover:border-[#9A7B1D]"
+            >
+              <CheckCircle className="w-6 h-6 text-[#9A7B1D] mb-3" />
+              <h2 className="text-lg text-gray-900 mb-1">Online Check-in</h2>
+              <p className="text-sm text-gray-500">
+                Check in an existing online booking and complete the medical
+                file.
+              </p>
+            </button>
           </div>
+        </div>
+      )}
+
+      {screen === "select-role" && (
+        <div className="fixed bottom-0 left-0 right-0 pb-4 text-center">
+          <p className="text-sm text-gray-500">
+            <span className="font-bold text-gray-700">
+              A System bt Test Africa Projects
+            </span>
+          </p>
         </div>
       )}
 
@@ -1047,7 +1186,7 @@ function AccessPortalContent({ onClose, onLoginSuccess }: AccessPortalProps) {
             Walk-in Client Type
           </h2>
           <p className="text-gray-500 text-center mb-8">
-            Select returning client, new client, or online booking check-in.
+            Select returning client or new client.
           </p>
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -1088,20 +1227,53 @@ function AccessPortalContent({ onClose, onLoginSuccess }: AccessPortalProps) {
             <button
               type="button"
               onClick={() => {
-                setCheckinPhone("");
-                setCheckinId("");
+                setFormLookupQuery("");
                 setMedicalIntakeContext(null);
-                setScreen("online-checkin");
+                setMedicalFormOrigin("walkin-type");
+                setMedicalIntakeOrigin("medical-form-search");
+                setScreen("medical-form-search");
               }}
               className="rounded-xl border border-gray-200 bg-white p-6 text-left hover:border-[#9A7B1D]"
             >
-              <CheckCircle className="w-6 h-6 text-[#9A7B1D] mb-3" />
-              <h3 className="text-lg text-gray-900 mb-1">Online Check-in</h3>
+              <FileText className="w-6 h-6 text-[#9A7B1D] mb-3" />
+              <h3 className="text-lg text-gray-900 mb-1">Fill Medical Form</h3>
               <p className="text-sm text-gray-500">
-                Check in an existing online booking and complete the medical
-                file.
+                Search booking and complete the medical form once admin
+                confirms.
               </p>
             </button>
+          </div>
+        </div>
+      )}
+
+      {screen === "medical-form-search" && (
+        <div className="max-w-md mx-auto px-4 py-10">
+          <div className="rounded-xl border border-gray-200 bg-white p-6">
+            <h2 className="text-xl text-gray-900 mb-2">Fill Medical Form</h2>
+            <p className="text-sm text-gray-500 mb-5">
+              Search by phone or ID. If your booking is confirmed by admin, you
+              will continue to the medical form.
+            </p>
+
+            <div className="space-y-4">
+              <div className="space-y-1.5">
+                <Label htmlFor="medical-form-lookup">Phone or ID Number</Label>
+                <Input
+                  id="medical-form-lookup"
+                  value={formLookupQuery}
+                  onChange={(event) => setFormLookupQuery(event.target.value)}
+                  placeholder="e.g. 0821234567 or ID number"
+                />
+              </div>
+
+              <Button
+                onClick={() => void handleMedicalFormLookup()}
+                disabled={formLookupLoading || !formLookupQuery.trim()}
+                className="w-full bg-[#9A7B1D] hover:bg-[#7d6418]"
+              >
+                {formLookupLoading ? "Checking booking..." : "Find Booking"}
+              </Button>
+            </div>
           </div>
         </div>
       )}
@@ -1160,12 +1332,35 @@ function AccessPortalContent({ onClose, onLoginSuccess }: AccessPortalProps) {
             Completing medical file for {medicalIntakeContext.patientName}
           </div>
 
+          {medicalIntakeContext.previousForm && (
+            <div className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-900">
+              <p className="font-semibold mb-1">Previous Medical Form Found</p>
+              <p>
+                Last submitted:{" "}
+                {medicalIntakeContext.previousForm.created_at
+                  ? (() => {
+                      try {
+                        return format(
+                          new Date(
+                            medicalIntakeContext.previousForm.created_at,
+                          ),
+                          "d MMM yyyy, HH:mm",
+                        );
+                      } catch {
+                        return "Unknown";
+                      }
+                    })()
+                  : "Unknown"}
+              </p>
+            </div>
+          )}
+
           <MedicalIntakeForm
             initialData={medicalIntakeContext.initialData}
             onSubmit={handleMedicalIntakeSubmit}
             onCancel={() => {
               setMedicalIntakeContext(null);
-              setScreen("online-checkin");
+              setScreen(medicalIntakeOrigin);
             }}
           />
         </div>
@@ -1174,6 +1369,20 @@ function AccessPortalContent({ onClose, onLoginSuccess }: AccessPortalProps) {
       {screen === "returning-search" && (
         <div className="min-h-[70vh] px-4 py-10 flex items-center justify-center">
           <div className="w-full max-w-2xl">
+            <div className="flex justify-end mb-4">
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setFormLookupQuery("");
+                  setMedicalFormOrigin("returning-search");
+                  setMedicalIntakeOrigin("medical-form-search");
+                  setScreen("medical-form-search");
+                }}
+              >
+                Fill Medical Form
+              </Button>
+            </div>
+
             <img
               src={logo}
               alt="DentX Quarters"
@@ -1248,6 +1457,20 @@ function AccessPortalContent({ onClose, onLoginSuccess }: AccessPortalProps) {
       {screen === "new-details" && (
         <div className="max-w-3xl mx-auto px-4 sm:px-6 py-10">
           <div className="rounded-xl border border-gray-200 bg-white p-4 sm:p-6">
+            <div className="flex justify-end mb-4">
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setFormLookupQuery("");
+                  setMedicalFormOrigin("new-details");
+                  setMedicalIntakeOrigin("medical-form-search");
+                  setScreen("medical-form-search");
+                }}
+              >
+                Fill Medical Form
+              </Button>
+            </div>
+
             <h2 className="text-2xl text-gray-900 mb-2">New Client Details</h2>
             <p className="text-sm text-gray-500 mb-6">
               Capture patient details before selecting a slot.
@@ -1422,6 +1645,11 @@ function AccessPortalContent({ onClose, onLoginSuccess }: AccessPortalProps) {
                     : "Not selected"}
                 </span>
               </div>
+            </div>
+
+            <div className="mt-5 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+              Admin must confirm this booking before a medical form can be
+              filled.
             </div>
 
             <div className="mt-8 flex justify-end">

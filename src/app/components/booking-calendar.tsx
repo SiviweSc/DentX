@@ -78,6 +78,8 @@ interface CreateBookingForm {
   practitionerType: string;
   date: string;
   time: string;
+  createdAt: string;
+  assignedDoctorId: string;
   reason: string;
   firstName: string;
   lastName: string;
@@ -93,6 +95,8 @@ const INITIAL_CREATE_FORM: CreateBookingForm = {
   practitionerType: "",
   date: "",
   time: "",
+  createdAt: "",
+  assignedDoctorId: "",
   reason: "",
   firstName: "",
   lastName: "",
@@ -112,6 +116,11 @@ interface BookingCalendarProps {
   canCompleteBooking?: boolean;
 }
 
+interface DoctorOption {
+  id: number;
+  username: string;
+}
+
 function toLocalDateString(date: Date) {
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, "0");
@@ -127,6 +136,15 @@ function combineDateAndTime(dateValue: string, timeValue: string) {
   const [year, month, day] = dateValue.split("-").map(Number);
   const [hours, minutes] = timeValue.split(":").map(Number);
   return new Date(year, month - 1, day, hours, minutes, 0, 0);
+}
+
+function toDateTimeLocalValue(date: Date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  const hours = String(date.getHours()).padStart(2, "0");
+  const minutes = String(date.getMinutes()).padStart(2, "0");
+  return `${year}-${month}-${day}T${hours}:${minutes}`;
 }
 
 function getWeekRangeLabel(currentDate: Date) {
@@ -232,6 +250,8 @@ export function BookingCalendar({
   const [createBookingForm, setCreateBookingForm] =
     useState<CreateBookingForm>(INITIAL_CREATE_FORM);
   const [creatingBooking, setCreatingBooking] = useState(false);
+  const [doctorOptions, setDoctorOptions] = useState<DoctorOption[]>([]);
+  const [loadingDoctors, setLoadingDoctors] = useState(false);
   const availableServices = SERVICE_CATALOG.filter((service) =>
     isServiceEnabled(availabilityConfig, service.id),
   );
@@ -270,6 +290,54 @@ export function BookingCalendar({
 
     loadAvailability();
   }, []);
+
+  useEffect(() => {
+    const fetchDoctors = async () => {
+      if (!authToken) return;
+
+      try {
+        setLoadingDoctors(true);
+        let lastResponse: Response | null = null;
+
+        for (const baseUrl of supabaseAdminApiBaseUrls) {
+          const response = await fetch(`${baseUrl}/doctors`, {
+            headers: {
+              Authorization: `Basic ${authToken}`,
+            },
+          });
+
+          lastResponse = response;
+          if (response.status !== 404) {
+            break;
+          }
+        }
+
+        if (!lastResponse || !lastResponse.ok) {
+          return;
+        }
+
+        const data = await lastResponse.json();
+        if (!data?.success || !Array.isArray(data?.doctors)) {
+          return;
+        }
+
+        setDoctorOptions(
+          data.doctors
+            .filter((doctor: any) => Number.isInteger(Number(doctor?.id)))
+            .map((doctor: any) => ({
+              id: Number(doctor.id),
+              username: String(doctor.username || "Doctor"),
+            })),
+        );
+      } catch (error) {
+        console.error("Failed to load doctors for calendar form:", error);
+      } finally {
+        setLoadingDoctors(false);
+      }
+    };
+
+    void fetchDoctors();
+  }, [authToken]);
 
   const fetchBookings = async () => {
     try {
@@ -348,6 +416,7 @@ export function BookingCalendar({
       time: allowedSlots.includes(timeValue)
         ? timeValue
         : (allowedSlots[0] ?? ""),
+      createdAt: toDateTimeLocalValue(new Date()),
     });
     setShowCreateDialog(true);
   };
@@ -471,26 +540,53 @@ export function BookingCalendar({
     try {
       setCreatingBooking(true);
 
-      const { error } = await supabase.from("bookings").insert({
-        service_type: createBookingForm.serviceType,
-        practitioner_type: createBookingForm.practitionerType,
+      let lastResponse: Response | null = null;
+      const requestBody = {
+        serviceType: createBookingForm.serviceType,
+        practitionerType: createBookingForm.practitionerType,
         date: `${createBookingForm.date}T09:00:00`,
         time: createBookingForm.time,
         reason: createBookingForm.reason || "",
-        first_name: createBookingForm.firstName,
-        last_name: createBookingForm.lastName,
+        firstName: createBookingForm.firstName,
+        lastName: createBookingForm.lastName,
         email: createBookingForm.email || "",
         phone: createBookingForm.phone,
-        id_number: createBookingForm.idNumber || "",
-        medical_aid: createBookingForm.medicalAid || "",
-        medical_aid_number: createBookingForm.medicalAidNumber || "",
+        idNumber: createBookingForm.idNumber || "",
+        medicalAid: createBookingForm.medicalAid || "",
+        medicalAidNumber: createBookingForm.medicalAidNumber || "",
         source: "admin-calendar",
-        status: "pending",
-      });
+        createdAt: createBookingForm.createdAt
+          ? new Date(createBookingForm.createdAt).toISOString()
+          : undefined,
+        assignedDoctorId: createBookingForm.assignedDoctorId
+          ? Number(createBookingForm.assignedDoctorId)
+          : undefined,
+      };
 
-      if (error) {
-        console.error("Error creating booking:", error);
-        toast.error("Failed to create booking");
+      for (const baseUrl of supabaseAdminApiBaseUrls) {
+        const response = await fetch(`${baseUrl}/bookings`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(requestBody),
+        });
+
+        lastResponse = response;
+        if (response.status !== 404) {
+          break;
+        }
+      }
+
+      if (!lastResponse) {
+        toast.error("No response from create booking endpoint");
+        return;
+      }
+
+      const data = await lastResponse.json();
+      if (!lastResponse.ok || !data?.success) {
+        console.error("Error creating booking:", data);
+        toast.error(data?.error || "Failed to create booking");
         return;
       }
 
@@ -1001,6 +1097,49 @@ export function BookingCalendar({
                       This date is closed for bookings. Choose another date.
                     </p>
                   )}
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Booking Created At
+                </label>
+                <input
+                  type="datetime-local"
+                  value={createBookingForm.createdAt}
+                  onChange={(e) =>
+                    handleCreateBookingChange("createdAt", e.target.value)
+                  }
+                  className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#9A7B1D]"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Assigned Doctor
+                </label>
+                <select
+                  value={createBookingForm.assignedDoctorId}
+                  onChange={(e) =>
+                    handleCreateBookingChange(
+                      "assignedDoctorId",
+                      e.target.value,
+                    )
+                  }
+                  className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#9A7B1D]"
+                >
+                  <option value="">Not assigned</option>
+                  {doctorOptions.map((doctor) => (
+                    <option key={doctor.id} value={String(doctor.id)}>
+                      Dr. {doctor.username}
+                    </option>
+                  ))}
+                </select>
+                {loadingDoctors && (
+                  <p className="mt-2 text-xs text-gray-500">
+                    Loading doctors...
+                  </p>
+                )}
               </div>
             </div>
 

@@ -130,7 +130,7 @@ export function AdminDashboard({
       id: "settings",
       label: "Settings",
       icon: ClipboardList,
-      visible: permissions.settings,
+      visible: true,
     },
     {
       id: "users",
@@ -273,7 +273,12 @@ export function AdminDashboard({
           )}
           {activeSection === "patients" && <PatientsContent />}
           {activeSection === "practice" && (
-            <PracticeManagementContent authToken={authToken} />
+            <PracticeManagementContent
+              authToken={authToken}
+              currentUserId={currentUserId}
+              currentUserRole={normalizedRole}
+              canManageAvailability={permissions.manageAvailability}
+            />
           )}
           {activeSection === "activity" && <ActivityContent />}
           {activeSection === "settings" && (
@@ -296,7 +301,13 @@ export function AdminDashboard({
   );
 }
 
-function AvailabilitySettingsPanel({ authToken }: { authToken: string }) {
+function AvailabilitySettingsPanel({
+  authToken,
+  mode = "all",
+}: {
+  authToken: string;
+  mode?: "all" | "hours" | "services";
+}) {
   const [availabilityConfig, setAvailabilityConfig] = useState(
     DEFAULT_AVAILABILITY_CONFIG,
   );
@@ -398,219 +409,230 @@ function AvailabilitySettingsPanel({ authToken }: { authToken: string }) {
     await persistAvailability(nextConfig, `hours:${dayKey}:${field}`);
   };
 
+  const showHours = mode === "all" || mode === "hours";
+  const showServices = mode === "all" || mode === "services";
+
   return (
     <div className="space-y-6">
-      <Card>
-        <CardHeader>
-          <CardTitle>Operating Hours</CardTitle>
-        </CardHeader>
-        <CardContent>
-          {loadingAvailability ? (
-            <p className="text-gray-500">Loading availability settings...</p>
-          ) : (
-            <div className="space-y-3">
-              {OPERATING_DAYS.map((day) => {
-                const dayConfig = availabilityConfig.operatingHours[day.key];
-                const slots = dayConfig.enabled
-                  ? getAvailableTimeSlots(
-                      availabilityConfig,
-                      new Date(
-                        `${
-                          {
-                            monday: "2026-04-06",
-                            tuesday: "2026-04-07",
-                            wednesday: "2026-04-08",
-                            thursday: "2026-04-09",
-                            friday: "2026-04-10",
-                            saturday: "2026-04-11",
-                            sunday: "2026-04-12",
-                          }[day.key]
-                        }T12:00:00`,
-                      ),
-                    )
-                  : [];
+      {showHours && (
+        <Card id="practice-operating-hours-editor" className="scroll-mt-24">
+          <CardHeader>
+            <CardTitle>Operating Hours</CardTitle>
+          </CardHeader>
+          <CardContent>
+            {loadingAvailability ? (
+              <p className="text-gray-500">Loading availability settings...</p>
+            ) : (
+              <div className="space-y-3">
+                {OPERATING_DAYS.map((day) => {
+                  const dayConfig = availabilityConfig.operatingHours[day.key];
+                  const slots = dayConfig.enabled
+                    ? getAvailableTimeSlots(
+                        availabilityConfig,
+                        new Date(
+                          `${
+                            {
+                              monday: "2026-04-06",
+                              tuesday: "2026-04-07",
+                              wednesday: "2026-04-08",
+                              thursday: "2026-04-09",
+                              friday: "2026-04-10",
+                              saturday: "2026-04-11",
+                              sunday: "2026-04-12",
+                            }[day.key]
+                          }T12:00:00`,
+                        ),
+                      )
+                    : [];
 
-                return (
-                  <div
-                    key={day.key}
-                    className="rounded-lg border border-gray-200 p-4"
-                  >
-                    <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-                      <div>
-                        <p className="text-sm font-semibold text-gray-900">
-                          {day.label}
-                        </p>
-                        <p className="text-xs text-gray-500 mt-1">
-                          {dayConfig.enabled
-                            ? `${slots.length} booking slot${slots.length === 1 ? "" : "s"} available`
-                            : "Closed for bookings"}
-                        </p>
-                      </div>
-                      <div className="flex items-center gap-3">
-                        <Badge
-                          className={
-                            dayConfig.enabled
-                              ? "bg-green-100 text-green-800"
-                              : "bg-gray-100 text-gray-700"
-                          }
-                        >
-                          {dayConfig.enabled ? "Open" : "Closed"}
-                        </Badge>
-                        <Switch
-                          checked={dayConfig.enabled}
-                          disabled={savingKey === `hours:${day.key}:enabled`}
-                          onCheckedChange={(checked) =>
-                            updateOperatingDay(day.key, "enabled", checked)
-                          }
-                        />
-                      </div>
-                    </div>
-
-                    <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
-                      <div>
-                        <label className="block text-xs font-medium text-gray-600 mb-1">
-                          Opens
-                        </label>
-                        <input
-                          type="time"
-                          step="1800"
-                          value={dayConfig.start}
-                          disabled={!dayConfig.enabled}
-                          onChange={(e) =>
-                            updateOperatingDay(day.key, "start", e.target.value)
-                          }
-                          className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#9A7B1D] disabled:bg-gray-100"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-xs font-medium text-gray-600 mb-1">
-                          Closes
-                        </label>
-                        <input
-                          type="time"
-                          step="1800"
-                          value={dayConfig.end}
-                          disabled={!dayConfig.enabled}
-                          onChange={(e) =>
-                            updateOperatingDay(day.key, "end", e.target.value)
-                          }
-                          className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#9A7B1D] disabled:bg-gray-100"
-                        />
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>Service Availability</CardTitle>
-        </CardHeader>
-        <CardContent>
-          {loadingAvailability ? (
-            <p className="text-gray-500">Loading availability settings...</p>
-          ) : (
-            <div className="space-y-4">
-              {SERVICE_CATALOG.map((service) => {
-                const serviceConfig = availabilityConfig.services[service.id];
-
-                return (
-                  <div
-                    key={service.id}
-                    className="rounded-lg border border-gray-200 p-4"
-                  >
-                    <div className="flex items-center justify-between gap-4">
-                      <div>
-                        <p className="text-sm font-semibold text-gray-900">
-                          {service.title}
-                        </p>
-                        <p className="text-xs text-gray-500">
-                          Frontend booking, public services, and admin calendar
-                          creation follow this toggle.
-                        </p>
-                      </div>
-                      <div className="flex items-center gap-3">
-                        <Badge
-                          className={
-                            serviceConfig.enabled
-                              ? "bg-green-100 text-green-800"
-                              : "bg-gray-100 text-gray-700"
-                          }
-                        >
-                          {serviceConfig.enabled ? "On" : "Off"}
-                        </Badge>
-                        <Switch
-                          checked={serviceConfig.enabled}
-                          disabled={savingKey === `service:${service.id}`}
-                          onCheckedChange={(checked) =>
-                            toggleService(service.id, checked)
-                          }
-                        />
-                      </div>
-                    </div>
-
-                    <div className="mt-4 space-y-3">
-                      {service.practitioners.map((practitioner) => (
-                        <div
-                          key={practitioner.id}
-                          className="flex items-center justify-between gap-4 rounded-md bg-gray-50 px-3 py-2"
-                        >
-                          <div>
-                            <p className="text-sm text-gray-800">
-                              {practitioner.title}
-                            </p>
-                            <p className="text-xs text-gray-500">
-                              Available when enabled and the parent service is
-                              on.
-                            </p>
-                          </div>
-                          <div className="flex items-center gap-3">
-                            <Badge
-                              className={
-                                availabilityConfig.services[service.id]
-                                  .practitioners[practitioner.id]
-                                  ? "bg-green-100 text-green-800"
-                                  : "bg-gray-100 text-gray-700"
-                              }
-                            >
-                              {availabilityConfig.services[service.id]
-                                .practitioners[practitioner.id]
-                                ? "On"
-                                : "Off"}
-                            </Badge>
-                            <Switch
-                              checked={
-                                availabilityConfig.services[service.id]
-                                  .practitioners[practitioner.id]
-                              }
-                              disabled={
-                                !serviceConfig.enabled ||
-                                savingKey ===
-                                  `practitioner:${service.id}:${practitioner.id}`
-                              }
-                              onCheckedChange={(checked) =>
-                                togglePractitioner(
-                                  service.id,
-                                  practitioner.id,
-                                  checked,
-                                )
-                              }
-                            />
-                          </div>
+                  return (
+                    <div
+                      key={day.key}
+                      className="rounded-lg border border-gray-200 p-4"
+                    >
+                      <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+                        <div>
+                          <p className="text-sm font-semibold text-gray-900">
+                            {day.label}
+                          </p>
+                          <p className="text-xs text-gray-500 mt-1">
+                            {dayConfig.enabled
+                              ? `${slots.length} booking slot${slots.length === 1 ? "" : "s"} available`
+                              : "Closed for bookings"}
+                          </p>
                         </div>
-                      ))}
+                        <div className="flex items-center gap-3">
+                          <Badge
+                            className={
+                              dayConfig.enabled
+                                ? "bg-green-100 text-green-800"
+                                : "bg-gray-100 text-gray-700"
+                            }
+                          >
+                            {dayConfig.enabled ? "Open" : "Closed"}
+                          </Badge>
+                          <Switch
+                            checked={dayConfig.enabled}
+                            disabled={savingKey === `hours:${day.key}:enabled`}
+                            onCheckedChange={(checked) =>
+                              updateOperatingDay(day.key, "enabled", checked)
+                            }
+                          />
+                        </div>
+                      </div>
+
+                      <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div>
+                          <label className="block text-xs font-medium text-gray-600 mb-1">
+                            Opens
+                          </label>
+                          <input
+                            type="time"
+                            step="1800"
+                            value={dayConfig.start}
+                            disabled={!dayConfig.enabled}
+                            onChange={(e) =>
+                              updateOperatingDay(
+                                day.key,
+                                "start",
+                                e.target.value,
+                              )
+                            }
+                            className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#9A7B1D] disabled:bg-gray-100"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-medium text-gray-600 mb-1">
+                            Closes
+                          </label>
+                          <input
+                            type="time"
+                            step="1800"
+                            value={dayConfig.end}
+                            disabled={!dayConfig.enabled}
+                            onChange={(e) =>
+                              updateOperatingDay(day.key, "end", e.target.value)
+                            }
+                            className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#9A7B1D] disabled:bg-gray-100"
+                          />
+                        </div>
+                      </div>
                     </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </CardContent>
-      </Card>
+                  );
+                })}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
+      {showServices && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Service Availability</CardTitle>
+          </CardHeader>
+          <CardContent>
+            {loadingAvailability ? (
+              <p className="text-gray-500">Loading availability settings...</p>
+            ) : (
+              <div className="space-y-4">
+                {SERVICE_CATALOG.map((service) => {
+                  const serviceConfig = availabilityConfig.services[service.id];
+
+                  return (
+                    <div
+                      key={service.id}
+                      className="rounded-lg border border-gray-200 p-4"
+                    >
+                      <div className="flex items-center justify-between gap-4">
+                        <div>
+                          <p className="text-sm font-semibold text-gray-900">
+                            {service.title}
+                          </p>
+                          <p className="text-xs text-gray-500">
+                            Frontend booking, public services, and admin
+                            calendar creation follow this toggle.
+                          </p>
+                        </div>
+                        <div className="flex items-center gap-3">
+                          <Badge
+                            className={
+                              serviceConfig.enabled
+                                ? "bg-green-100 text-green-800"
+                                : "bg-gray-100 text-gray-700"
+                            }
+                          >
+                            {serviceConfig.enabled ? "On" : "Off"}
+                          </Badge>
+                          <Switch
+                            checked={serviceConfig.enabled}
+                            disabled={savingKey === `service:${service.id}`}
+                            onCheckedChange={(checked) =>
+                              toggleService(service.id, checked)
+                            }
+                          />
+                        </div>
+                      </div>
+
+                      <div className="mt-4 space-y-3">
+                        {service.practitioners.map((practitioner) => (
+                          <div
+                            key={practitioner.id}
+                            className="flex items-center justify-between gap-4 rounded-md bg-gray-50 px-3 py-2"
+                          >
+                            <div>
+                              <p className="text-sm text-gray-800">
+                                {practitioner.title}
+                              </p>
+                              <p className="text-xs text-gray-500">
+                                Available when enabled and the parent service is
+                                on.
+                              </p>
+                            </div>
+                            <div className="flex items-center gap-3">
+                              <Badge
+                                className={
+                                  availabilityConfig.services[service.id]
+                                    .practitioners[practitioner.id]
+                                    ? "bg-green-100 text-green-800"
+                                    : "bg-gray-100 text-gray-700"
+                                }
+                              >
+                                {availabilityConfig.services[service.id]
+                                  .practitioners[practitioner.id]
+                                  ? "On"
+                                  : "Off"}
+                              </Badge>
+                              <Switch
+                                checked={
+                                  availabilityConfig.services[service.id]
+                                    .practitioners[practitioner.id]
+                                }
+                                disabled={
+                                  !serviceConfig.enabled ||
+                                  savingKey ===
+                                    `practitioner:${service.id}:${practitioner.id}`
+                                }
+                                onCheckedChange={(checked) =>
+                                  togglePractitioner(
+                                    service.id,
+                                    practitioner.id,
+                                    checked,
+                                  )
+                                }
+                              />
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
     </div>
   );
 }
@@ -3767,12 +3789,24 @@ function PatientsContent() {
   );
 }
 
-function PracticeManagementContent({ authToken }: { authToken: string }) {
+function PracticeManagementContent({
+  authToken,
+  currentUserId,
+  currentUserRole,
+  canManageAvailability,
+}: {
+  authToken: string;
+  currentUserId?: number;
+  currentUserRole?: string;
+  canManageAvailability?: boolean;
+}) {
   const [availabilityConfig, setAvailabilityConfig] = useState(
     DEFAULT_AVAILABILITY_CONFIG,
   );
   const [loadingAvailability, setLoadingAvailability] = useState(true);
-  const [savingKey, setSavingKey] = useState<string | null>(null);
+  const [showHoursDialog, setShowHoursDialog] = useState(false);
+  const [showServicesDialog, setShowServicesDialog] = useState(false);
+  const [showDoctorsDialog, setShowDoctorsDialog] = useState(false);
 
   useEffect(() => {
     const loadAvailability = async () => {
@@ -3784,102 +3818,46 @@ function PracticeManagementContent({ authToken }: { authToken: string }) {
     loadAvailability();
   }, []);
 
-  const persistAvailability = async (
-    nextConfig: typeof availabilityConfig,
-    key: string,
-  ) => {
-    try {
-      setSavingKey(key);
-      const savedConfig = await updateAvailabilityConfig(nextConfig, authToken);
-      setAvailabilityConfig(savedConfig);
-      toast.success("Availability updated");
-    } catch (error) {
-      console.error("Failed to update availability:", error);
-      toast.error("Failed to update availability");
-      setAvailabilityConfig(await fetchAvailabilityConfig());
-    } finally {
-      setSavingKey(null);
-    }
-  };
-
-  const toggleService = async (serviceId: string, enabled: boolean) => {
-    const nextConfig = {
-      ...availabilityConfig,
-      services: {
-        ...availabilityConfig.services,
-        [serviceId]: {
-          ...availabilityConfig.services[serviceId],
-          enabled,
-        },
-      },
-    };
-
-    setAvailabilityConfig(nextConfig);
-    await persistAvailability(nextConfig, `service:${serviceId}`);
-  };
-
-  const togglePractitioner = async (
-    serviceId: string,
-    practitionerId: string,
-    enabled: boolean,
-  ) => {
-    const nextConfig = {
-      ...availabilityConfig,
-      services: {
-        ...availabilityConfig.services,
-        [serviceId]: {
-          ...availabilityConfig.services[serviceId],
-          practitioners: {
-            ...availabilityConfig.services[serviceId].practitioners,
-            [practitionerId]: enabled,
-          },
-        },
-      },
-    };
-
-    setAvailabilityConfig(nextConfig);
-    await persistAvailability(
-      nextConfig,
-      `practitioner:${serviceId}:${practitionerId}`,
-    );
-  };
-
   return (
     <div className="space-y-6">
-      <Card>
+      {/* Practice Information Card */}
+      <Card className="border-amber-100 bg-gradient-to-br from-amber-50 to-white">
         <CardHeader>
-          <CardTitle>Practice Information</CardTitle>
+          <CardTitle className="text-amber-900">Practice Information</CardTitle>
         </CardHeader>
         <CardContent>
           <div className="space-y-4">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <p className="text-sm font-medium text-gray-500">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div className="border-l-4 border-[#9A7B1D] pl-4">
+                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">
                   Practice Name
                 </p>
-                <p className="text-base font-semibold break-words">
+                <p className="text-lg font-bold text-gray-900">
                   DentX Quarters
                 </p>
               </div>
-              <div>
-                <p className="text-sm font-medium text-gray-500">
+              <div className="border-l-4 border-[#9A7B1D] pl-4">
+                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">
                   Contact Number
                 </p>
-                <p className="text-base font-semibold break-words">
+                <p className="text-lg font-bold text-gray-900">
                   +27 68 534 0763
                 </p>
               </div>
-              <div>
-                <p className="text-sm font-medium text-gray-500">Email</p>
-                <p className="text-base font-semibold break-words">
+              <div className="border-l-4 border-[#9A7B1D] pl-4">
+                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">
+                  Email
+                </p>
+                <p className="text-lg font-bold text-gray-900">
                   info@dentxquarters.co.za
                 </p>
               </div>
-              <div>
-                <p className="text-sm font-medium text-gray-500">Location</p>
-                <p className="text-base font-semibold break-words">
-                  City Center Nelspruit, Main Road, Mbombela 312-JT, Mbombela,
-                  1201
+              <div className="border-l-4 border-[#9A7B1D] pl-4">
+                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">
+                  Location
+                </p>
+                <p className="text-lg font-bold text-gray-900">
+                  City Center Nelspruit, Main Road, Mbombela 312-JT
                 </p>
               </div>
             </div>
@@ -3887,48 +3865,108 @@ function PracticeManagementContent({ authToken }: { authToken: string }) {
         </CardContent>
       </Card>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        <Card>
-          <CardHeader>
-            <CardTitle>Working Hours</CardTitle>
-          </CardHeader>
-          <CardContent>
+      {/* Working Hours Card */}
+      <Card>
+        <CardHeader className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+          <CardTitle>Operating Hours</CardTitle>
+        </CardHeader>
+        <CardContent>
+          {loadingAvailability ? (
+            <p className="text-sm text-gray-500">Loading operating hours...</p>
+          ) : (
             <div className="space-y-2 text-sm">
-              <div className="flex justify-between">
-                <span>Monday - Friday</span>
-                <span className="font-semibold">08:30 - 16:00</span>
-              </div>
-              <div className="flex justify-between">
-                <span>Saturday</span>
-                <span className="font-semibold">08:30 - 13:00</span>
-              </div>
-              <div className="flex justify-between">
-                <span>Sunday</span>
-                <span className="font-semibold text-red-600">Closed</span>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
+              {OPERATING_DAYS.map((day) => {
+                const dayConfig = availabilityConfig.operatingHours[day.key];
 
+                return (
+                  <div
+                    key={day.key}
+                    className="flex justify-between items-center py-2 border-b border-gray-100 last:border-b-0"
+                  >
+                    <span className="font-medium">{day.label}</span>
+                    <span
+                      className={`font-semibold ${
+                        dayConfig.enabled ? "text-[#9A7B1D]" : "text-red-600"
+                      }`}
+                    >
+                      {dayConfig.enabled
+                        ? `${dayConfig.start} - ${dayConfig.end}`
+                        : "Closed"}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {canManageAvailability && (
         <Card>
           <CardHeader>
-            <CardTitle>Quick Actions</CardTitle>
+            <CardTitle>Practice Management Actions</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="space-y-2">
-              <Button variant="outline" className="w-full justify-start">
-                Update Practice Details
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+              <Button
+                onClick={() => setShowHoursDialog(true)}
+                className="bg-[#9A7B1D] hover:bg-[#7d6418] text-white"
+              >
+                Update Operating Hours
               </Button>
-              <Button variant="outline" className="w-full justify-start">
-                Manage Services
+              <Button
+                onClick={() => setShowServicesDialog(true)}
+                className="bg-[#9A7B1D] hover:bg-[#7d6418] text-white"
+              >
+                Manage Service Availability
               </Button>
-              <Button variant="outline" className="w-full justify-start">
-                Configure Notifications
+              <Button
+                onClick={() => setShowDoctorsDialog(true)}
+                className="bg-[#9A7B1D] hover:bg-[#7d6418] text-white"
+              >
+                Manage Doctor Availability
               </Button>
             </div>
           </CardContent>
         </Card>
-      </div>
+      )}
+
+      <Dialog open={showHoursDialog} onOpenChange={setShowHoursDialog}>
+        <DialogContent className="w-[calc(100vw-1rem)] sm:w-[92vw] max-w-4xl max-h-[90vh] overflow-y-auto overflow-x-hidden p-4 sm:p-6">
+          <DialogHeader>
+            <DialogTitle>Update Operating Hours</DialogTitle>
+          </DialogHeader>
+          <AvailabilitySettingsPanel authToken={authToken} mode="hours" />
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={showServicesDialog} onOpenChange={setShowServicesDialog}>
+        <DialogContent className="w-[calc(100vw-1rem)] sm:w-[92vw] max-w-5xl max-h-[90vh] overflow-y-auto overflow-x-hidden p-4 sm:p-6">
+          <DialogHeader>
+            <DialogTitle>Manage Service Availability</DialogTitle>
+          </DialogHeader>
+          <AvailabilitySettingsPanel authToken={authToken} mode="services" />
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={showDoctorsDialog} onOpenChange={setShowDoctorsDialog}>
+        <DialogContent className="w-[calc(100vw-1rem)] sm:w-[92vw] max-w-3xl max-h-[90vh] overflow-y-auto overflow-x-hidden p-4 sm:p-6">
+          <DialogHeader>
+            <DialogTitle>Manage Doctor Availability</DialogTitle>
+          </DialogHeader>
+          {currentUserId && currentUserRole ? (
+            <DoctorAvailabilityPanel
+              authToken={authToken}
+              currentUserId={currentUserId}
+              currentUserRole={currentUserRole}
+            />
+          ) : (
+            <p className="text-sm text-gray-500">
+              Unable to load doctor availability.
+            </p>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
@@ -4624,32 +4662,126 @@ function SettingsContent({
 }) {
   return (
     <div className="space-y-6">
-      <Card>
+      <Card className="border-blue-100 bg-gradient-to-br from-blue-50 to-white">
         <CardHeader>
-          <CardTitle>Settings</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <p className="text-gray-500">
-            Manage operational settings and role-based access for staff users.
+          <CardTitle className="text-blue-900">System Settings</CardTitle>
+          <p className="text-sm text-gray-500 mt-2">
+            View your current system configuration and settings
           </p>
-        </CardContent>
+        </CardHeader>
       </Card>
 
-      {canManageAvailability ? (
-        <AvailabilitySettingsPanel authToken={authToken} />
-      ) : (
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         <Card>
-          <CardContent className="pt-6 text-sm text-gray-500">
-            You do not have permission to manage availability settings.
+          <CardHeader>
+            <CardTitle className="text-sm">Service Configuration</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-xs text-gray-600 mb-4">
+              All available services are currently configured and enabled for
+              patient bookings.
+            </p>
+            <div className="space-y-2">
+              <div className="flex items-center justify-between p-2 bg-gray-50 rounded">
+                <span className="text-sm">Dental Care</span>
+                <span className="text-xs font-semibold text-green-600 bg-green-50 px-2 py-1 rounded">
+                  Active
+                </span>
+              </div>
+              <div className="flex items-center justify-between p-2 bg-gray-50 rounded">
+                <span className="text-sm">General Medicine</span>
+                <span className="text-xs font-semibold text-green-600 bg-green-50 px-2 py-1 rounded">
+                  Active
+                </span>
+              </div>
+              <div className="flex items-center justify-between p-2 bg-gray-50 rounded">
+                <span className="text-sm">IV Drip Therapy</span>
+                <span className="text-xs font-semibold text-green-600 bg-green-50 px-2 py-1 rounded">
+                  Active
+                </span>
+              </div>
+              <div className="flex items-center justify-between p-2 bg-gray-50 rounded">
+                <span className="text-sm">Physiotherapy</span>
+                <span className="text-xs font-semibold text-green-600 bg-green-50 px-2 py-1 rounded">
+                  Active
+                </span>
+              </div>
+            </div>
           </CardContent>
         </Card>
-      )}
 
-      <DoctorAvailabilityPanel
-        authToken={authToken}
-        currentUserId={currentUserId}
-        currentUserRole={currentUserRole}
-      />
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-sm">Operating Status</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-xs text-gray-600 mb-4">
+              Current operation status and availability configuration for the
+              practice.
+            </p>
+            <div className="space-y-2">
+              <div className="flex items-center justify-between p-2 bg-gray-50 rounded">
+                <span className="text-sm font-medium">Online Bookings</span>
+                <span className="text-xs font-semibold text-green-600 bg-green-50 px-2 py-1 rounded">
+                  Enabled
+                </span>
+              </div>
+              <div className="flex items-center justify-between p-2 bg-gray-50 rounded">
+                <span className="text-sm font-medium">Walk-in Bookings</span>
+                <span className="text-xs font-semibold text-green-600 bg-green-50 px-2 py-1 rounded">
+                  Enabled
+                </span>
+              </div>
+              <div className="flex items-center justify-between p-2 bg-gray-50 rounded">
+                <span className="text-sm font-medium">Medical Forms</span>
+                <span className="text-xs font-semibold text-green-600 bg-green-50 px-2 py-1 rounded">
+                  Active
+                </span>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-sm">Your Access Level</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-xs text-gray-600 mb-4">
+              Your role determines what features you can access and manage.
+            </p>
+            <div className="space-y-2">
+              <div className="p-3 bg-amber-50 rounded border border-amber-200">
+                <p className="text-sm font-semibold text-gray-900 capitalize">
+                  {normalizeUserRole(currentUserRole)}
+                </p>
+                <p className="text-xs text-gray-500 mt-1">
+                  {canManageAvailability
+                    ? "Full access to practice management and availability settings"
+                    : "Limited access - view only mode"}
+                </p>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-sm">Need to Make Changes?</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-xs text-gray-600 mb-4">
+              To modify system settings or manage availability, visit the
+              Practice section.
+            </p>
+            <div className="space-y-1 text-xs text-gray-600">
+              <p>✓ Go to Practice to manage services</p>
+              <p>✓ Go to Practice to set operating hours</p>
+              <p>✓ Go to Practice to manage doctor availability</p>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
     </div>
   );
 }

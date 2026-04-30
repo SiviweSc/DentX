@@ -516,6 +516,9 @@ const normalizeTextValue = (value: string) =>
 
 const ensurePatientExistsForBooking = async (supabase: any, booking: any) => {
   const bookingIdNumber = String(booking.id_number || "").trim();
+  const bookingPhone = normalizePhoneValue(booking.phone || "");
+  const bookingFirstName = normalizeTextValue(booking.first_name || "");
+  const bookingLastName = normalizeTextValue(booking.last_name || "");
   let existingPatient: { id: string } | null = null;
 
   if (bookingIdNumber) {
@@ -535,20 +538,18 @@ const ensurePatientExistsForBooking = async (supabase: any, booking: any) => {
   }
 
   if (!existingPatient) {
-    const bookingPhone = normalizePhoneValue(booking.phone || "");
-    const bookingFirstName = normalizeTextValue(booking.first_name || "");
-    const bookingLastName = normalizeTextValue(booking.last_name || "");
-
-    const { data: samePhonePatients, error: phoneError } = await supabase
+    const { data: nameMatchedPatients, error: nameError } = await supabase
       .from("patients")
       .select("id, first_name, last_name, phone")
-      .eq("phone", booking.phone || "");
+      .ilike("first_name", booking.first_name || "")
+      .ilike("last_name", booking.last_name || "")
+      .limit(100);
 
-    if (phoneError) {
-      console.error("Failed to check patient by phone:", phoneError);
+    if (nameError) {
+      console.error("Failed to check patient by full name:", nameError);
     }
 
-    const matchedByNameAndPhone = (samePhonePatients || []).find(
+    const matchedByNameAndPhone = (nameMatchedPatients || []).find(
       (patient: any) =>
         normalizePhoneValue(patient.phone || "") === bookingPhone &&
         normalizeTextValue(patient.first_name || "") === bookingFirstName &&
@@ -943,6 +944,47 @@ app.post("/make-server-34100c2d/bookings", async (c) => {
       return c.json({ error: "That time is outside operating hours" }, 400);
     }
 
+    const createdAtValue = bookingData.createdAt || bookingData.created_at;
+    let createdAtIso: string | null = null;
+
+    if (createdAtValue) {
+      const parsedCreatedAt = new Date(createdAtValue);
+      if (Number.isNaN(parsedCreatedAt.getTime())) {
+        return c.json({ error: "Invalid booking created timestamp" }, 400);
+      }
+      createdAtIso = parsedCreatedAt.toISOString();
+    }
+
+    let assignedDoctorId: number | null = null;
+    let assignedDoctorUsername: string | null = null;
+
+    if (bookingData.assignedDoctorId || bookingData.assigned_doctor_id) {
+      const requestedDoctorId = Number(
+        bookingData.assignedDoctorId || bookingData.assigned_doctor_id,
+      );
+
+      if (!Number.isInteger(requestedDoctorId) || requestedDoctorId <= 0) {
+        return c.json({ error: "Invalid doctor selected" }, 400);
+      }
+
+      const { data: doctor, error: doctorError } = await supabase
+        .from("admin_users")
+        .select("id, username, role")
+        .eq("id", requestedDoctorId)
+        .maybeSingle();
+
+      if (doctorError) {
+        throw doctorError;
+      }
+
+      if (!doctor || normalizeRoleValue(doctor.role) !== "doctor") {
+        return c.json({ error: "Doctor not found" }, 404);
+      }
+
+      assignedDoctorId = doctor.id;
+      assignedDoctorUsername = doctor.username;
+    }
+
     // Insert booking
     const { data: booking, error: bookingError } = await supabase
       .from("bookings")
@@ -961,6 +1003,12 @@ app.post("/make-server-34100c2d/bookings", async (c) => {
         medical_aid_number: bookingData.medicalAidNumber || "",
         source: bookingData.source || "website",
         status: "pending",
+        assigned_doctor_id: assignedDoctorId,
+        assigned_doctor_username: assignedDoctorUsername,
+        assigned_at: assignedDoctorId
+          ? createdAtIso || new Date().toISOString()
+          : null,
+        created_at: createdAtIso || undefined,
       })
       .select()
       .single();
@@ -987,38 +1035,7 @@ app.post("/make-server-34100c2d/bookings", async (c) => {
       id_number: bookingData.idNumber || "",
     });
 
-    // Create/update patient record
-    if (bookingData.idNumber) {
-      // Check if patient exists
-      const { data: existingPatient } = await supabase
-        .from("patients")
-        .select("*")
-        .eq("id_number", bookingData.idNumber)
-        .single();
-
-      if (existingPatient) {
-        // Update existing patient
-        await supabase
-          .from("patients")
-          .update({
-            last_visit: new Date().toISOString(),
-            updated_at: new Date().toISOString(),
-          })
-          .eq("id_number", bookingData.idNumber);
-      } else {
-        // Create new patient
-        await supabase.from("patients").insert({
-          first_name: bookingData.firstName,
-          last_name: bookingData.lastName,
-          email: bookingData.email || "",
-          phone: bookingData.phone,
-          id_number: bookingData.idNumber,
-          medical_aid: bookingData.medicalAid || "",
-          medical_aid_number: bookingData.medicalAidNumber || "",
-          last_visit: new Date().toISOString(),
-        });
-      }
-    }
+    await ensurePatientExistsForBooking(supabase, booking);
 
     return c.json({ success: true, booking, bookingId: booking.id });
   } catch (error) {
@@ -1281,6 +1298,105 @@ app.post("/make-server-34100c2d/medical-intake", async (c) => {
     console.error("Medical intake error:", error);
     return c.json(
       { error: "Failed to save medical intake: " + error.message },
+      500,
+    );
+  }
+});
+
+// Lookup booking status and previous medical form before filling intake
+app.post("/make-server-34100c2d/medical-intake/lookup", async (c) => {
+  try {
+    const { query } = await c.req.json();
+    const searchValue = String(query || "").trim();
+    const safeSearchValue = searchValue.replace(/[,]/g, " ").trim();
+
+    if (!safeSearchValue) {
+      return c.json({ error: "Phone or ID number is required" }, 400);
+    }
+
+    const supabase = getSupabaseClient();
+
+    const { data: matches, error: bookingError } = await supabase
+      .from("bookings")
+      .select(
+        "id, first_name, last_name, date, time, phone, email, id_number, medical_aid, medical_aid_number, status, created_at",
+      )
+      .in("status", ["confirmed", "completed"])
+      .or(
+        `phone.ilike.%${safeSearchValue}%,id_number.ilike.%${safeSearchValue}%`,
+      )
+      .order("date", { ascending: false })
+      .order("created_at", { ascending: false })
+      .limit(50);
+
+    if (bookingError) {
+      throw bookingError;
+    }
+
+    if (!matches || matches.length === 0) {
+      return c.json({
+        success: true,
+        canFill: false,
+        requiresConfirmation: true,
+        message:
+          "No confirmed booking found yet. Admin must confirm your booking before you can fill the form.",
+      });
+    }
+
+    const booking = matches[0];
+    const bookingIds = matches.map((record: any) => record.id).filter(Boolean);
+
+    let previousForm: any = null;
+
+    if (bookingIds.length > 0) {
+      const { data: bookingLinkedForms, error: bookingLinkedFormsError } =
+        await supabase
+          .from("medical_intake")
+          .select("*")
+          .in("booking_id", bookingIds)
+          .order("created_at", { ascending: false })
+          .limit(1);
+
+      if (bookingLinkedFormsError) {
+        throw bookingLinkedFormsError;
+      }
+
+      if (bookingLinkedForms && bookingLinkedForms.length > 0) {
+        previousForm = bookingLinkedForms[0];
+      }
+    }
+
+    if (!previousForm) {
+      const { data: identifierForms, error: identifierFormsError } =
+        await supabase
+          .from("medical_intake")
+          .select("*")
+          .or(
+            `phone.eq.${booking.phone || ""},id_number.eq.${booking.id_number || ""}`,
+          )
+          .order("created_at", { ascending: false })
+          .limit(1);
+
+      if (identifierFormsError) {
+        throw identifierFormsError;
+      }
+
+      if (identifierForms && identifierForms.length > 0) {
+        previousForm = identifierForms[0];
+      }
+    }
+
+    return c.json({
+      success: true,
+      canFill: true,
+      requiresConfirmation: false,
+      booking,
+      previousForm,
+    });
+  } catch (error) {
+    console.error("Medical intake lookup error:", error);
+    return c.json(
+      { error: "Failed to lookup booking for medical form: " + error.message },
       500,
     );
   }
