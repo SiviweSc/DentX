@@ -97,13 +97,24 @@ export function Services({ onBookNow }: ServicesProps) {
             practice directly.
           </div>
         ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-12">
+          <div
+            className={`grid gap-6 mb-12 ${
+              activeServices.length === 1
+                ? "grid-cols-1 justify-items-center"
+                : activeServices.length === 2
+                  ? "grid-cols-1 md:grid-cols-2 justify-items-center"
+                  : "grid-cols-1 md:grid-cols-2 lg:grid-cols-4"
+            }`}
+          >
             {activeServices.map((service, index) => {
               const Icon = service.icon;
+              const isSingleItem = activeServices.length === 1;
               return (
                 <Card
                   key={index}
-                  className="hover:shadow-lg transition-shadow border-[#E8E2D5]"
+                  className={`hover:shadow-lg transition-shadow border-[#E8E2D5] ${
+                    isSingleItem ? "w-full max-w-sm" : ""
+                  }`}
                 >
                   <CardHeader>
                     <div

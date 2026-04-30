@@ -7,7 +7,10 @@ import {
 import { format, parse, startOfWeek, getDay } from "date-fns";
 import { enUS } from "date-fns/locale";
 import "react-big-calendar/lib/css/react-big-calendar.css";
-import { supabase } from "../../../utils/supabase/client";
+import {
+  supabase,
+  supabaseAdminApiBaseUrls,
+} from "../../../utils/supabase/client";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import {
@@ -66,6 +69,8 @@ interface BookingEvent extends Event {
   medical_aid?: string;
   medical_aid_number?: string;
   id_number?: string;
+  created_at?: string;
+  assigned_doctor_username?: string;
 }
 
 interface CreateBookingForm {
@@ -100,6 +105,9 @@ const INITIAL_CREATE_FORM: CreateBookingForm = {
 
 interface BookingCalendarProps {
   onClose?: () => void;
+  authToken?: string;
+  currentUserId?: number;
+  currentUserRole?: string;
   canConfirmBooking?: boolean;
   canCompleteBooking?: boolean;
 }
@@ -129,21 +137,81 @@ function getWeekRangeLabel(currentDate: Date) {
 }
 
 function CalendarEventContent({ event }: { event: BookingEvent }) {
+  const statusMeta: Record<
+    string,
+    { label: string; badgeBg: string; badgeColor: string }
+  > = {
+    pending: {
+      label: "Pending",
+      badgeBg: "#fef3c7",
+      badgeColor: "#92400e",
+    },
+    confirmed: {
+      label: "Confirmed",
+      badgeBg: "#d1fae5",
+      badgeColor: "#065f46",
+    },
+    completed: {
+      label: "Completed",
+      badgeBg: "#e0e7ff",
+      badgeColor: "#3730a3",
+    },
+    cancelled: {
+      label: "Cancelled",
+      badgeBg: "#ffe4e6",
+      badgeColor: "#9f1239",
+    },
+  };
+  const meta =
+    statusMeta[event.status] ||
+    ({
+      label: event.status,
+      badgeBg: "#f3f4f6",
+      badgeColor: "#374151",
+    } as const);
+
   return (
-    <div className="min-w-0 leading-tight">
-      <div className="font-semibold truncate">{event.time_str}</div>
-      <div className="truncate">
+    <div className="h-full min-w-0 overflow-hidden flex flex-col gap-1">
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-[11px] font-semibold leading-none truncate">
+          {event.time_str}
+        </span>
+        <span
+          className="text-[10px] font-semibold rounded px-1.5 py-0.5 leading-none shrink-0"
+          style={{ backgroundColor: meta.badgeBg, color: meta.badgeColor }}
+        >
+          {meta.label}
+        </span>
+      </div>
+
+      <div className="text-xs font-bold leading-tight truncate">
         {event.first_name} {event.last_name}
       </div>
-      <div className="truncate opacity-90">
+
+      <div className="text-[11px] leading-tight truncate capitalize opacity-90">
         {event.service_type?.replace(/-/g, " ")}
       </div>
+
+      {event.phone && (
+        <div className="text-[10px] leading-tight truncate opacity-80">
+          Tel: {event.phone}
+        </div>
+      )}
+
+      {event.assigned_doctor_username && (
+        <div className="text-[10px] leading-tight truncate font-semibold opacity-90">
+          Dr. {event.assigned_doctor_username}
+        </div>
+      )}
     </div>
   );
 }
 
 export function BookingCalendar({
   onClose: _onClose,
+  authToken,
+  currentUserId,
+  currentUserRole,
   canConfirmBooking = false,
   canCompleteBooking = false,
 }: BookingCalendarProps) {
@@ -207,11 +275,20 @@ export function BookingCalendar({
     try {
       setLoading(true);
 
-      const { data: bookingsData, error } = await supabase
+      let bookingsQuery = supabase
         .from("bookings")
         .select("*")
         .order("date", { ascending: true })
         .order("time", { ascending: true });
+
+      if (
+        String(currentUserRole || "").toLowerCase() === "doctor" &&
+        typeof currentUserId === "number"
+      ) {
+        bookingsQuery = bookingsQuery.eq("assigned_doctor_id", currentUserId);
+      }
+
+      const { data: bookingsData, error } = await bookingsQuery;
 
       if (error) {
         console.error("Error fetching bookings:", error);
@@ -246,6 +323,8 @@ export function BookingCalendar({
             medical_aid: booking.medical_aid,
             medical_aid_number: booking.medical_aid_number,
             id_number: booking.id_number,
+            created_at: booking.created_at,
+            assigned_doctor_username: booking.assigned_doctor_username,
           };
         },
       );
@@ -392,28 +471,6 @@ export function BookingCalendar({
     try {
       setCreatingBooking(true);
 
-      const dayStart = `${createBookingForm.date}T00:00:00`;
-      const dayEnd = `${createBookingForm.date}T23:59:59`;
-
-      const { data: conflictingBookings, error: conflictError } = await supabase
-        .from("bookings")
-        .select("id, status")
-        .gte("date", dayStart)
-        .lte("date", dayEnd)
-        .eq("time", createBookingForm.time)
-        .in("status", ["pending", "confirmed", "completed"]);
-
-      if (conflictError) {
-        toast.error("Failed to validate slot availability");
-        return;
-      }
-
-      if ((conflictingBookings || []).length > 0) {
-        toast.error("That slot is no longer available");
-        await fetchBookings();
-        return;
-      }
-
       const { error } = await supabase.from("bookings").insert({
         service_type: createBookingForm.serviceType,
         practitioner_type: createBookingForm.practitionerType,
@@ -506,13 +563,39 @@ export function BookingCalendar({
     }
 
     try {
-      const { error } = await supabase
-        .from("bookings")
-        .update({ status: "confirmed" })
-        .eq("id", selectedBooking.id);
+      if (!authToken) {
+        toast.error("Missing authentication token");
+        return;
+      }
 
-      if (error) {
+      let lastResponse: Response | null = null;
+      for (const baseUrl of supabaseAdminApiBaseUrls) {
+        const response = await fetch(
+          `${baseUrl}/bookings/${selectedBooking.id}`,
+          {
+            method: "PUT",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Basic ${authToken}`,
+            },
+            body: JSON.stringify({ status: "confirmed" }),
+          },
+        );
+
+        lastResponse = response;
+        if (response.status !== 404) {
+          break;
+        }
+      }
+
+      if (!lastResponse) {
         toast.error("Failed to confirm booking");
+        return;
+      }
+
+      const data = await lastResponse.json();
+      if (!lastResponse.ok || !data.success) {
+        toast.error(data.error || "Failed to confirm booking");
         return;
       }
 
@@ -535,13 +618,39 @@ export function BookingCalendar({
     }
 
     try {
-      const { error } = await supabase
-        .from("bookings")
-        .update({ status: "completed" })
-        .eq("id", selectedBooking.id);
+      if (!authToken) {
+        toast.error("Missing authentication token");
+        return;
+      }
 
-      if (error) {
+      let lastResponse: Response | null = null;
+      for (const baseUrl of supabaseAdminApiBaseUrls) {
+        const response = await fetch(
+          `${baseUrl}/bookings/${selectedBooking.id}`,
+          {
+            method: "PUT",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Basic ${authToken}`,
+            },
+            body: JSON.stringify({ status: "completed" }),
+          },
+        );
+
+        lastResponse = response;
+        if (response.status !== 404) {
+          break;
+        }
+      }
+
+      if (!lastResponse) {
         toast.error("Failed to complete booking");
+        return;
+      }
+
+      const data = await lastResponse.json();
+      if (!lastResponse.ok || !data.success) {
+        toast.error(data.error || "Failed to complete booking");
         return;
       }
 
@@ -555,16 +664,81 @@ export function BookingCalendar({
     }
   };
 
+  const handleUnconfirmBooking = async () => {
+    if (!selectedBooking) return;
+
+    if (!canConfirmBooking) {
+      toast.error("You do not have permission to unconfirm bookings");
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `Unconfirm booking for ${selectedBooking.first_name} ${selectedBooking.last_name}? This will move it back to pending and clear the assigned doctor.`,
+    );
+
+    if (!confirmed) {
+      return;
+    }
+
+    try {
+      if (!authToken) {
+        toast.error("Missing authentication token");
+        return;
+      }
+
+      let lastResponse: Response | null = null;
+      for (const baseUrl of supabaseAdminApiBaseUrls) {
+        const response = await fetch(
+          `${baseUrl}/bookings/${selectedBooking.id}`,
+          {
+            method: "PUT",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Basic ${authToken}`,
+            },
+            body: JSON.stringify({ status: "pending" }),
+          },
+        );
+
+        lastResponse = response;
+        if (response.status !== 404) {
+          break;
+        }
+      }
+
+      if (!lastResponse) {
+        toast.error("Failed to unconfirm booking");
+        return;
+      }
+
+      const data = await lastResponse.json();
+      if (!lastResponse.ok || !data.success) {
+        toast.error(data.error || "Failed to unconfirm booking");
+        return;
+      }
+
+      toast.success("Booking moved back to pending");
+      setShowDetails(false);
+      setSelectedBooking(null);
+      fetchBookings();
+    } catch (err) {
+      console.error("Error:", err);
+      toast.error("Failed to unconfirm booking");
+    }
+  };
+
   const eventStyleGetter = (event: BookingEvent) => {
     if (event.status === "confirmed") {
       return {
         style: {
-          backgroundColor: "#10b981",
-          borderRadius: "10px",
-          color: "white",
-          border: "1px solid #059669",
+          backgroundColor: "#ecfdf5",
+          borderRadius: "8px",
+          color: "#111827",
+          border: "1px solid #a7f3d0",
+          borderLeft: "4px solid #10b981",
           fontWeight: 600,
-          padding: "2px 4px",
+          padding: "6px 7px",
+          boxShadow: "0 1px 2px rgba(0,0,0,0.05)",
         },
       };
     }
@@ -572,12 +746,14 @@ export function BookingCalendar({
     if (event.status === "pending") {
       return {
         style: {
-          backgroundColor: "#f59e0b",
-          borderRadius: "10px",
-          color: "white",
-          border: "1px solid #d97706",
+          backgroundColor: "#fffbeb",
+          borderRadius: "8px",
+          color: "#111827",
+          border: "1px solid #fcd34d",
+          borderLeft: "4px solid #f59e0b",
           fontWeight: 600,
-          padding: "2px 4px",
+          padding: "6px 7px",
+          boxShadow: "0 1px 2px rgba(0,0,0,0.05)",
         },
       };
     }
@@ -585,12 +761,14 @@ export function BookingCalendar({
     if (event.status === "completed") {
       return {
         style: {
-          backgroundColor: "#6366f1",
-          borderRadius: "10px",
-          color: "white",
-          border: "1px solid #4f46e5",
+          backgroundColor: "#eef2ff",
+          borderRadius: "8px",
+          color: "#111827",
+          border: "1px solid #c7d2fe",
+          borderLeft: "4px solid #6366f1",
           fontWeight: 600,
-          padding: "2px 4px",
+          padding: "6px 7px",
+          boxShadow: "0 1px 2px rgba(0,0,0,0.05)",
         },
       };
     }
@@ -598,12 +776,14 @@ export function BookingCalendar({
     return {
       style: {
         backgroundColor: "#fff1f2",
-        borderRadius: "10px",
+        borderRadius: "8px",
         color: "#be123c",
-        border: "1px dashed #fb7185",
+        border: "1px solid #fecdd3",
+        borderLeft: "4px solid #fb7185",
         fontWeight: 600,
-        padding: "2px 4px",
-        opacity: 0.95,
+        padding: "6px 7px",
+        opacity: 0.98,
+        boxShadow: "0 1px 2px rgba(0,0,0,0.04)",
       },
     };
   };
@@ -733,7 +913,7 @@ export function BookingCalendar({
       </div>
 
       <div className="flex-1 overflow-x-auto rounded-lg border border-gray-200 bg-white">
-        <div className="min-w-[980px] h-[780px] [&_.rbc-time-view]:border-0 [&_.rbc-time-header-content]:border-l-0 [&_.rbc-time-content]:border-t [&_.rbc-timeslot-group]:min-h-[64px] [&_.rbc-toolbar]:hidden [&_.rbc-event]:shadow-none [&_.rbc-event-label]:hidden [&_.rbc-time-slot]:text-xs [&_.rbc-header]:py-3 [&_.rbc-header]:text-sm [&_.rbc-header]:font-semibold [&_.rbc-today]:bg-[#faf7ef] [&_.rbc-current-time-indicator]:bg-[#9A7B1D]">
+        <div className="min-w-[980px] h-[780px] [&_.rbc-time-view]:border-0 [&_.rbc-time-header-content]:border-l-0 [&_.rbc-time-content]:border-t [&_.rbc-timeslot-group]:min-h-[96px] [&_.rbc-toolbar]:hidden [&_.rbc-event]:shadow-none [&_.rbc-event]:min-h-[84px] [&_.rbc-event-label]:hidden [&_.rbc-event-content]:h-full [&_.rbc-event-content]:overflow-hidden [&_.rbc-time-slot]:text-xs [&_.rbc-header]:py-3 [&_.rbc-header]:text-sm [&_.rbc-header]:font-semibold [&_.rbc-today]:bg-[#faf7ef] [&_.rbc-current-time-indicator]:bg-[#9A7B1D]">
           <BigCalendar
             localizer={localizer}
             events={events}
@@ -1081,6 +1261,26 @@ export function BookingCalendar({
                 </p>
               </div>
 
+              <div>
+                <p className="text-sm font-medium text-gray-600">Created</p>
+                <p className="text-sm mt-1">
+                  {selectedBooking.created_at
+                    ? format(new Date(selectedBooking.created_at), "PPP p")
+                    : "Unknown"}
+                </p>
+              </div>
+
+              {selectedBooking.assigned_doctor_username && (
+                <div>
+                  <p className="text-sm font-medium text-gray-600">
+                    Assigned Doctor
+                  </p>
+                  <p className="text-sm mt-1 text-blue-700 font-medium">
+                    Dr. {selectedBooking.assigned_doctor_username}
+                  </p>
+                </div>
+              )}
+
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
                   <p className="text-sm font-medium text-gray-600">Phone</p>
@@ -1123,6 +1323,16 @@ export function BookingCalendar({
                       >
                         <Check className="w-3 h-3 sm:w-4 sm:h-4 mr-1" />
                         Mark Complete
+                      </Button>
+                    )}
+                  {selectedBooking.status === "confirmed" &&
+                    canConfirmBooking && (
+                      <Button
+                        variant="outline"
+                        onClick={handleUnconfirmBooking}
+                        className="flex-1 text-amber-700 border-amber-600 hover:bg-amber-50 text-xs sm:text-sm"
+                      >
+                        Unconfirm
                       </Button>
                     )}
                   {(selectedBooking.status === "pending" ||

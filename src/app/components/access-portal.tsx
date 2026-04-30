@@ -1,6 +1,14 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { format } from "date-fns";
-import { ArrowLeft, Lock, Search, User, Users, X } from "lucide-react";
+import {
+  ArrowLeft,
+  CheckCircle,
+  Lock,
+  Search,
+  User,
+  Users,
+  X,
+} from "lucide-react";
 import { toast } from "sonner";
 import {
   supabaseAdminApiBaseUrls,
@@ -17,6 +25,9 @@ import {
   isTimeWithinOperatingHours,
 } from "../lib/availability";
 import logo from "../../assets/cadae8615ee9587c8f09fa141332814475e43e29.png";
+import MedicalIntakeForm, {
+  type MedicalIntakeData,
+} from "./medical-intake-form";
 import { Button } from "./ui/button";
 import { Calendar } from "./ui/calendar";
 import { Input } from "./ui/input";
@@ -32,6 +43,8 @@ type PortalScreen =
   | "select-role"
   | "admin-login"
   | "walkin-type"
+  | "online-checkin"
+  | "medical-intake"
   | "returning-search"
   | "returning-service"
   | "returning-slot"
@@ -45,6 +58,7 @@ type WalkInSource = "walk-in-existing" | "walk-in-new";
 interface AccessPortalProps {
   onClose: () => void;
   onLoginSuccess: (session: {
+    id: number;
     token: string;
     username: string;
     role: UserRole;
@@ -72,6 +86,12 @@ interface WalkInDetails {
   idNumber: string;
   medicalAid: string;
   medicalAidNumber: string;
+}
+
+interface MedicalIntakeContextData {
+  bookingId: string;
+  patientName: string;
+  initialData: Partial<MedicalIntakeData>;
 }
 
 const EMPTY_WALKIN_DETAILS: WalkInDetails = {
@@ -146,6 +166,11 @@ function AccessPortalContent({ onClose, onLoginSuccess }: AccessPortalProps) {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [loginLoading, setLoginLoading] = useState(false);
+  const [checkinPhone, setCheckinPhone] = useState("");
+  const [checkinId, setCheckinId] = useState("");
+  const [checkinLoading, setCheckinLoading] = useState(false);
+  const [medicalIntakeContext, setMedicalIntakeContext] =
+    useState<MedicalIntakeContextData | null>(null);
 
   const [searchTerm, setSearchTerm] = useState("");
   const [searching, setSearching] = useState(false);
@@ -426,6 +451,7 @@ function AccessPortalContent({ onClose, onLoginSuccess }: AccessPortalProps) {
       if (response.ok && data.success && data.token) {
         toast.success("Login successful!");
         onLoginSuccess({
+          id: Number(data?.user?.id || 0),
           token: data.token,
           username: data?.user?.username || username,
           role: normalizeUserRole(data?.user?.role),
@@ -626,6 +652,89 @@ function AccessPortalContent({ onClose, onLoginSuccess }: AccessPortalProps) {
     }
   };
 
+  const handleOnlineBookingCheckIn = async () => {
+    const query = checkinPhone.trim() || checkinId.trim();
+
+    if (!query) {
+      toast.error("Enter the patient's phone number or ID number");
+      return;
+    }
+
+    try {
+      setCheckinLoading(true);
+
+      const response = await apiFetchPublic(`/bookings/check-in`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ query }),
+      });
+
+      if (!response) {
+        throw new Error("No response from check-in endpoint");
+      }
+
+      const data = await parseApiResponse(response, "Check-in endpoint");
+      const booking = data.booking;
+      const patientName =
+        `${booking?.first_name || ""} ${booking?.last_name || ""}`.trim();
+
+      setMedicalIntakeContext({
+        bookingId: String(booking?.id || ""),
+        patientName: patientName || "Patient",
+        initialData: {
+          patient_first_name: booking?.first_name || "",
+          patient_surname: booking?.last_name || "",
+          patient_cell: booking?.phone || "",
+          patient_email: booking?.email || "",
+          patient_id_number: booking?.id_number || "",
+          medical_aid_name: booking?.medical_aid || "",
+          medical_aid_number: booking?.medical_aid_number || "",
+        },
+      });
+
+      toast.success("Check-in successful");
+      setScreen("medical-intake");
+    } catch (error) {
+      console.error("Check-in failed:", error);
+      toast.error(
+        error instanceof Error ? error.message : "Failed to check in booking",
+      );
+    } finally {
+      setCheckinLoading(false);
+    }
+  };
+
+  const handleMedicalIntakeSubmit = async (formData: MedicalIntakeData) => {
+    if (!medicalIntakeContext?.bookingId) {
+      toast.error("Missing booking context for medical form");
+      return;
+    }
+
+    const response = await apiFetchPublic(`/medical-intake`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        ...formData,
+        booking_id: medicalIntakeContext.bookingId,
+      }),
+    });
+
+    if (!response) {
+      throw new Error("No response from medical intake endpoint");
+    }
+
+    await parseApiResponse(response, "Medical intake endpoint");
+
+    setMedicalIntakeContext(null);
+    setCheckinPhone("");
+    setCheckinId("");
+    setScreen("online-checkin");
+  };
+
   const renderTopBar = () => (
     <div className="bg-white border-b border-gray-200 sticky top-0 z-40">
       <div className="max-w-6xl mx-auto px-4 sm:px-6 py-3 flex items-center justify-between">
@@ -636,7 +745,11 @@ function AccessPortalContent({ onClose, onLoginSuccess }: AccessPortalProps) {
               return;
             }
 
-            if (screen === "admin-login" || screen === "walkin-type") {
+            if (
+              screen === "admin-login" ||
+              screen === "walkin-type" ||
+              screen === "online-checkin"
+            ) {
               setScreen("select-role");
               return;
             }
@@ -663,6 +776,12 @@ function AccessPortalContent({ onClose, onLoginSuccess }: AccessPortalProps) {
 
             if (screen === "new-slot") {
               setScreen("new-service");
+              return;
+            }
+
+            if (screen === "medical-intake") {
+              setMedicalIntakeContext(null);
+              setScreen("online-checkin");
               return;
             }
 
@@ -928,10 +1047,10 @@ function AccessPortalContent({ onClose, onLoginSuccess }: AccessPortalProps) {
             Walk-in Client Type
           </h2>
           <p className="text-gray-500 text-center mb-8">
-            Select whether this client is returning or new.
+            Select returning client, new client, or online booking check-in.
           </p>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <button
               type="button"
               onClick={() => {
@@ -965,7 +1084,90 @@ function AccessPortalContent({ onClose, onLoginSuccess }: AccessPortalProps) {
                 Capture new patient details, then book a slot.
               </p>
             </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                setCheckinPhone("");
+                setCheckinId("");
+                setMedicalIntakeContext(null);
+                setScreen("online-checkin");
+              }}
+              className="rounded-xl border border-gray-200 bg-white p-6 text-left hover:border-[#9A7B1D]"
+            >
+              <CheckCircle className="w-6 h-6 text-[#9A7B1D] mb-3" />
+              <h3 className="text-lg text-gray-900 mb-1">Online Check-in</h3>
+              <p className="text-sm text-gray-500">
+                Check in an existing online booking and complete the medical
+                file.
+              </p>
+            </button>
           </div>
+        </div>
+      )}
+
+      {screen === "online-checkin" && (
+        <div className="max-w-md mx-auto px-4 py-10">
+          <div className="rounded-xl border border-gray-200 bg-white p-6">
+            <h2 className="text-xl text-gray-900 mb-2">Online Check-in</h2>
+            <p className="text-sm text-gray-500 mb-5">
+              Enter the patient's phone number or ID number to locate
+              today&apos;s confirmed online booking.
+            </p>
+
+            <div className="space-y-4">
+              <div className="space-y-1.5">
+                <Label htmlFor="checkin-phone">Phone Number</Label>
+                <Input
+                  id="checkin-phone"
+                  value={checkinPhone}
+                  onChange={(event) => setCheckinPhone(event.target.value)}
+                  placeholder="e.g. 0821234567"
+                />
+              </div>
+
+              <div className="text-center text-xs uppercase tracking-wide text-gray-400">
+                or
+              </div>
+
+              <div className="space-y-1.5">
+                <Label htmlFor="checkin-id">ID Number</Label>
+                <Input
+                  id="checkin-id"
+                  value={checkinId}
+                  onChange={(event) => setCheckinId(event.target.value)}
+                  placeholder="South African ID number"
+                />
+              </div>
+
+              <Button
+                onClick={() => void handleOnlineBookingCheckIn()}
+                disabled={
+                  checkinLoading || (!checkinPhone.trim() && !checkinId.trim())
+                }
+                className="w-full bg-[#9A7B1D] hover:bg-[#7d6418]"
+              >
+                {checkinLoading ? "Checking In..." : "Check In"}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {screen === "medical-intake" && medicalIntakeContext && (
+        <div className="max-w-6xl mx-auto px-4 sm:px-6 py-8 space-y-4">
+          <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+            Completing medical file for {medicalIntakeContext.patientName}
+          </div>
+
+          <MedicalIntakeForm
+            initialData={medicalIntakeContext.initialData}
+            onSubmit={handleMedicalIntakeSubmit}
+            onCancel={() => {
+              setMedicalIntakeContext(null);
+              setScreen("online-checkin");
+            }}
+          />
         </div>
       )}
 

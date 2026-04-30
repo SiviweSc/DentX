@@ -20,6 +20,7 @@ import {
 } from "./lib/roles";
 
 interface AdminSession {
+  id: number;
   token: string;
   username: string;
   role: UserRole;
@@ -57,6 +58,7 @@ export default function App() {
   };
 
   const handleLoginSuccess = (session: {
+    id: number;
     token: string;
     username: string;
     role: UserRole;
@@ -65,6 +67,7 @@ export default function App() {
   }) => {
     const normalizedRole = normalizeUserRole(session.role);
     setAdminSession({
+      id: session.id,
       token: session.token,
       username: session.username,
       role: normalizedRole,
@@ -86,6 +89,7 @@ export default function App() {
         <AdminDashboard
           onClose={handleAdminLogout}
           authToken={adminSession.token}
+          currentUserId={adminSession.id}
           currentUserName={adminSession.username}
           currentUserRole={adminSession.role}
           currentUserRoleLabel={adminSession.roleLabel}

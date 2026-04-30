@@ -143,6 +143,160 @@ const isValidRole = async (
   return Boolean(data?.role);
 };
 
+const getDatePartFromIso = (value: string) => String(value || "").slice(0, 10);
+
+const pickDoctorForBooking = async (
+  supabase: ReturnType<typeof getSupabaseClient>,
+  bookingDateValue: string,
+  bookingTimeValue: string,
+  currentAssignedDoctorId?: number | null,
+) => {
+  const bookingDatePart = getDatePartFromIso(bookingDateValue);
+
+  const { data: doctors, error: doctorsError } = await supabase
+    .from("admin_users")
+    .select("id, username")
+    .eq("role", "doctor")
+    .eq("is_available", true)
+    .order("id", { ascending: true });
+
+  if (doctorsError) {
+    throw doctorsError;
+  }
+
+  const activeDoctors = doctors || [];
+  if (!activeDoctors.length) {
+    return null;
+  }
+
+  const { data: conflictingBookings, error: bookingError } = await supabase
+    .from("bookings")
+    .select("assigned_doctor_id")
+    .gte("date", `${bookingDatePart}T00:00:00`)
+    .lt("date", `${bookingDatePart}T23:59:59`)
+    .eq("time", bookingTimeValue)
+    .in("status", ["confirmed", "completed"])
+    .not("assigned_doctor_id", "is", null);
+
+  if (bookingError) {
+    throw bookingError;
+  }
+
+  const unavailableDoctorIds = new Set(
+    (conflictingBookings || [])
+      .map((booking: any) => Number(booking.assigned_doctor_id))
+      .filter((id: number) => Number.isInteger(id)),
+  );
+
+  if (
+    currentAssignedDoctorId &&
+    activeDoctors.some(
+      (doctor: any) => doctor.id === currentAssignedDoctorId,
+    ) &&
+    !unavailableDoctorIds.has(currentAssignedDoctorId)
+  ) {
+    return activeDoctors.find(
+      (doctor: any) => doctor.id === currentAssignedDoctorId,
+    );
+  }
+
+  return (
+    activeDoctors.find((doctor: any) => !unavailableDoctorIds.has(doctor.id)) ||
+    null
+  );
+};
+
+const getAppointmentDateTime = (
+  bookingDateValue: string,
+  bookingTimeValue: string,
+) => {
+  const datePart = getDatePartFromIso(bookingDateValue);
+  const timePart = normalizeTimeValue(bookingTimeValue, "");
+
+  if (!datePart || !timePart) {
+    return null;
+  }
+
+  const appointment = new Date(`${datePart}T${timePart}:00`);
+  if (Number.isNaN(appointment.getTime())) {
+    return null;
+  }
+
+  return appointment;
+};
+
+const releaseExpiredUncheckedInBookings = async (
+  supabase: ReturnType<typeof getSupabaseClient>,
+) => {
+  const today = new Date();
+  const datePart = getDatePartFromIso(today.toISOString());
+  const now = new Date();
+
+  const { data: candidates, error } = await supabase
+    .from("bookings")
+    .select("id, first_name, last_name, date, time, source, checked_in_at")
+    .eq("status", "confirmed")
+    .gte("date", `${datePart}T00:00:00`)
+    .lt("date", `${datePart}T23:59:59`)
+    .is("checked_in_at", null);
+
+  if (error) {
+    throw error;
+  }
+
+  const expiredBookingIds: string[] = [];
+  const expiredBookings = (candidates || []).filter((booking: any) => {
+    const source = String(booking.source || "").toLowerCase();
+    if (source.startsWith("walk-in")) {
+      return false;
+    }
+
+    const appointment = getAppointmentDateTime(booking.date, booking.time);
+    if (!appointment) {
+      return false;
+    }
+
+    const cutoff = new Date(appointment.getTime() - 15 * 60 * 1000);
+    return now > cutoff;
+  });
+
+  for (const booking of expiredBookings) {
+    expiredBookingIds.push(booking.id);
+  }
+
+  if (!expiredBookingIds.length) {
+    return { released: 0 };
+  }
+
+  const { error: updateError } = await supabase
+    .from("bookings")
+    .update({
+      status: "cancelled",
+      cancellation_reason:
+        "Automatically unbooked: patient did not check in 15 minutes before appointment",
+      cancelled_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    })
+    .in("id", expiredBookingIds);
+
+  if (updateError) {
+    throw updateError;
+  }
+
+  await supabase.from("activity_log").insert(
+    expiredBookingIds.map((bookingId) => ({
+      type: "booking_auto_unbooked",
+      user_name: "System",
+      user_role: "system",
+      description:
+        "Booking automatically unbooked because patient did not check in before cutoff",
+      booking_id: bookingId,
+    })),
+  );
+
+  return { released: expiredBookingIds.length };
+};
+
 // Middleware to check admin authentication
 const requireAuth = async (c: any, next: any) => {
   const authHeader = c.req.header("Authorization");
@@ -713,6 +867,7 @@ app.post("/make-server-34100c2d/auth/login", async (c) => {
     return c.json({
       success: true,
       user: {
+        id: data.id,
         username: data.username,
         role: roleDefinition.role,
         roleLabel: roleDefinition.roleLabel,
@@ -733,6 +888,8 @@ app.post("/make-server-34100c2d/auth/login", async (c) => {
 app.get("/make-server-34100c2d/bookings", requireAuth, async (c) => {
   try {
     const supabase = getSupabaseClient();
+    await releaseExpiredUncheckedInBookings(supabase);
+
     const { data, error } = await supabase
       .from("bookings")
       .select("*")
@@ -870,12 +1027,283 @@ app.post("/make-server-34100c2d/bookings", async (c) => {
   }
 });
 
+// Check in an online booking from the walk-in desk
+app.post("/make-server-34100c2d/bookings/check-in", async (c) => {
+  try {
+    const { query } = await c.req.json();
+    const searchValue = String(query || "").trim();
+    const safeSearchValue = searchValue.replace(/[,]/g, " ").trim();
+
+    if (!safeSearchValue) {
+      return c.json({ error: "Phone or ID number is required" }, 400);
+    }
+
+    const supabase = getSupabaseClient();
+    await releaseExpiredUncheckedInBookings(supabase);
+
+    const todayPart = getDatePartFromIso(new Date().toISOString());
+
+    const { data: matches, error } = await supabase
+      .from("bookings")
+      .select(
+        "id, first_name, last_name, date, time, phone, email, id_number, medical_aid, medical_aid_number, source, status, checked_in_at",
+      )
+      .eq("status", "confirmed")
+      .gte("date", `${todayPart}T00:00:00`)
+      .lt("date", `${todayPart}T23:59:59`)
+      .or(
+        `phone.ilike.%${safeSearchValue}%,id_number.ilike.%${safeSearchValue}%`,
+      )
+      .order("time", { ascending: true });
+
+    if (error) {
+      throw error;
+    }
+
+    const onlineBookings = (matches || []).filter((booking: any) => {
+      const source = String(booking.source || "").toLowerCase();
+      return !source.startsWith("walk-in");
+    });
+
+    if (!onlineBookings.length) {
+      return c.json(
+        {
+          error:
+            "No confirmed online booking found for today with that phone or ID",
+        },
+        404,
+      );
+    }
+
+    const now = new Date();
+    const selectedBooking =
+      onlineBookings.find((booking: any) => !booking.checked_in_at) ||
+      onlineBookings[0];
+    const appointment = getAppointmentDateTime(
+      selectedBooking.date,
+      selectedBooking.time,
+    );
+
+    if (!appointment) {
+      return c.json({ error: "Booking has invalid date/time" }, 400);
+    }
+
+    const cutoff = new Date(appointment.getTime() - 15 * 60 * 1000);
+    if (!selectedBooking.checked_in_at && now > cutoff) {
+      await releaseExpiredUncheckedInBookings(supabase);
+      return c.json(
+        {
+          error:
+            "Check-in window missed. This booking has been automatically unbooked.",
+        },
+        409,
+      );
+    }
+
+    let checkedInBooking = selectedBooking;
+
+    if (!selectedBooking.checked_in_at) {
+      const { data: updatedBooking, error: checkInError } = await supabase
+        .from("bookings")
+        .update({
+          checked_in_at: now.toISOString(),
+          checked_in_source: "walk-in-desk",
+          updated_at: now.toISOString(),
+        })
+        .eq("id", selectedBooking.id)
+        .select(
+          "id, first_name, last_name, date, time, phone, email, id_number, medical_aid, medical_aid_number, checked_in_at",
+        )
+        .single();
+
+      if (checkInError) {
+        throw checkInError;
+      }
+
+      checkedInBooking = updatedBooking;
+
+      await supabase.from("activity_log").insert({
+        type: "booking_checked_in",
+        user_name: "Walk-In Desk",
+        user_role: "reception",
+        description: `Online booking checked in for ${checkedInBooking.first_name} ${checkedInBooking.last_name}`,
+        booking_id: checkedInBooking.id,
+      });
+    }
+
+    return c.json({ success: true, booking: checkedInBooking });
+  } catch (error) {
+    console.error("Check-in error:", error);
+    return c.json(
+      { error: "Failed to check in booking: " + error.message },
+      500,
+    );
+  }
+});
+
+// Save medical intake form data
+app.post("/make-server-34100c2d/medical-intake", async (c) => {
+  try {
+    const formData = await c.req.json();
+    const bookingId = formData.booking_id;
+
+    if (!bookingId) {
+      return c.json({ error: "Booking ID is required" }, 400);
+    }
+
+    const supabase = getSupabaseClient();
+
+    // Verify booking exists
+    const { data: booking, error: bookingError } = await supabase
+      .from("bookings")
+      .select(
+        "id, first_name, last_name, phone, id_number, email, medical_aid, medical_aid_number",
+      )
+      .eq("id", bookingId)
+      .maybeSingle();
+
+    if (bookingError) {
+      throw bookingError;
+    }
+
+    if (!booking) {
+      return c.json({ error: "Booking not found" }, 404);
+    }
+
+    // Try to find existing patient by id_number, phone, or name
+    let patientId: string | null = null;
+    const idNumber = formData.patient_id_number || booking.id_number;
+    const phone = formData.patient_cell || booking.phone;
+    const firstName = formData.patient_first_name || booking.first_name;
+    const lastName = formData.patient_surname || booking.last_name;
+
+    // Search by id_number first (most reliable)
+    if (idNumber) {
+      const { data: existingPatient } = await supabase
+        .from("patients")
+        .select("id")
+        .eq("id_number", idNumber)
+        .maybeSingle();
+
+      if (existingPatient) {
+        patientId = existingPatient.id;
+      }
+    }
+
+    // If not found, search by phone
+    if (!patientId && phone) {
+      const { data: existingPatient } = await supabase
+        .from("patients")
+        .select("id")
+        .eq("phone", phone)
+        .maybeSingle();
+
+      if (existingPatient) {
+        patientId = existingPatient.id;
+      }
+    }
+
+    // If still not found, create new patient record
+    if (!patientId) {
+      const { data: newPatient, error: insertPatientError } = await supabase
+        .from("patients")
+        .insert({
+          first_name: firstName,
+          last_name: lastName,
+          phone: phone,
+          id_number: idNumber || null,
+          email: formData.patient_email || booking.email || null,
+          medical_aid: formData.medical_aid_name || booking.medical_aid || null,
+          medical_aid_number:
+            formData.medical_aid_number || booking.medical_aid_number || null,
+          date_of_birth: formData.patient_date_of_birth || null,
+          address: formData.patient_address || null,
+        })
+        .select("id")
+        .single();
+
+      if (insertPatientError) {
+        throw insertPatientError;
+      }
+
+      patientId = newPatient.id;
+    }
+
+    // Save medical intake form using canonical fields + full payload backup
+    const { data: medicalIntake, error: insertError } = await supabase
+      .from("medical_intake")
+      .insert({
+        patient_id: patientId,
+        booking_id: bookingId,
+        account_number: formData.account_number || null,
+        first_name: firstName || null,
+        last_name: lastName || null,
+        date_of_birth: formData.patient_date_of_birth || null,
+        id_number: idNumber || null,
+        phone: phone || null,
+        email: formData.patient_email || booking.email || null,
+        responsible_name:
+          `${formData.responsible_first_name || ""} ${formData.responsible_surname || ""}`.trim() ||
+          null,
+        responsible_phone: formData.responsible_cell || null,
+        medical_aid: formData.medical_aid_name || booking.medical_aid || null,
+        medical_aid_number:
+          formData.medical_aid_number || booking.medical_aid_number || null,
+        emergency_contact_name: formData.nearest_name || null,
+        emergency_contact_relationship: formData.nearest_relationship || null,
+        emergency_contact_phone: formData.nearest_cell || null,
+        emergency_contact_address: formData.nearest_address || null,
+        referral_source: formData.referred_by_name || null,
+        family_details: Array.isArray(formData.family_details)
+          ? formData.family_details
+          : [],
+        form_payload: formData,
+      })
+      .select()
+      .single();
+
+    if (insertError) {
+      throw insertError;
+    }
+
+    // Log activity
+    await supabase.from("activity_log").insert({
+      type: "medical_intake_submitted",
+      user_name: "Patient Portal",
+      user_role: "patient",
+      description: `Medical intake form submitted for ${firstName} ${lastName}`,
+      booking_id: bookingId,
+      patient_id: patientId,
+    });
+
+    return c.json({ success: true, medicalIntake });
+  } catch (error) {
+    console.error("Medical intake error:", error);
+    return c.json(
+      { error: "Failed to save medical intake: " + error.message },
+      500,
+    );
+  }
+});
+
 // Update booking status
 app.put("/make-server-34100c2d/bookings/:id", requireAuth, async (c) => {
   try {
     const bookingId = c.req.param("id");
     const updates = await c.req.json();
     const user = c.get("user");
+    const supabase = getSupabaseClient();
+
+    const { data: existingBooking, error: existingBookingError } =
+      await supabase
+        .from("bookings")
+        .select("id, date, time, status, assigned_doctor_id")
+        .eq("id", bookingId)
+        .single();
+
+    if (existingBookingError || !existingBooking) {
+      return c.json({ error: "Booking not found" }, 404);
+    }
 
     if (updates?.status === "confirmed") {
       if (!hasPermission(user?.permissions || {}, "bookings.confirm")) {
@@ -887,6 +1315,84 @@ app.put("/make-server-34100c2d/bookings/:id", requireAuth, async (c) => {
           403,
         );
       }
+
+      const requestedDoctorId = updates?.doctor_id
+        ? Number(updates.doctor_id)
+        : null;
+      delete updates.doctor_id;
+
+      let assignedDoctor: { id: number; username: string } | null = null;
+
+      if (requestedDoctorId) {
+        // Validate the requested doctor is available and not double-booked
+        const bookingDatePart = getDatePartFromIso(existingBooking.date);
+        const bookingTime = normalizeTimeValue(
+          updates?.time || existingBooking.time,
+          existingBooking.time,
+        );
+
+        const { data: doctorRow } = await supabase
+          .from("admin_users")
+          .select("id, username, is_available")
+          .eq("id", requestedDoctorId)
+          .eq("role", "doctor")
+          .maybeSingle();
+
+        if (!doctorRow) {
+          return c.json({ error: "Doctor not found" }, 404);
+        }
+        if (!doctorRow.is_available) {
+          return c.json(
+            { error: "The selected doctor is currently unavailable" },
+            409,
+          );
+        }
+
+        const { data: conflict } = await supabase
+          .from("bookings")
+          .select("id")
+          .gte("date", `${bookingDatePart}T00:00:00`)
+          .lt("date", `${bookingDatePart}T23:59:59`)
+          .eq("time", bookingTime)
+          .eq("assigned_doctor_id", requestedDoctorId)
+          .in("status", ["confirmed", "completed"])
+          .neq("id", existingBooking.id)
+          .limit(1);
+
+        if (conflict && conflict.length > 0) {
+          return c.json(
+            { error: "The selected doctor already has a booking at this time" },
+            409,
+          );
+        }
+
+        assignedDoctor = { id: doctorRow.id, username: doctorRow.username };
+      } else {
+        assignedDoctor = await pickDoctorForBooking(
+          supabase,
+          existingBooking.date,
+          normalizeTimeValue(
+            updates?.time || existingBooking.time,
+            existingBooking.time,
+          ),
+          existingBooking.assigned_doctor_id,
+        );
+      }
+
+      if (!assignedDoctor) {
+        return c.json(
+          {
+            error: "No doctor available for this slot",
+            detail: "Please choose another time or mark a doctor as available",
+          },
+          409,
+        );
+      }
+
+      updates.assigned_doctor_id = assignedDoctor.id;
+      updates.assigned_doctor_username = assignedDoctor.username;
+      updates.assigned_at = new Date().toISOString();
+      updates.confirmed_at = new Date().toISOString();
     }
 
     if (updates?.status === "completed") {
@@ -899,9 +1405,37 @@ app.put("/make-server-34100c2d/bookings/:id", requireAuth, async (c) => {
           403,
         );
       }
+
+      if (
+        normalizeRoleValue(user?.role) === "doctor" &&
+        Number(existingBooking.assigned_doctor_id) !== Number(user?.id)
+      ) {
+        return c.json(
+          {
+            error: "Forbidden",
+            detail: "Doctors can only complete bookings assigned to them",
+          },
+          403,
+        );
+      }
     }
 
-    const supabase = getSupabaseClient();
+    if (updates?.status === "pending") {
+      if (!hasPermission(user?.permissions || {}, "bookings.confirm")) {
+        return c.json(
+          {
+            error: "Forbidden",
+            detail: "You do not have permission to unconfirm bookings",
+          },
+          403,
+        );
+      }
+
+      updates.assigned_doctor_id = null;
+      updates.assigned_doctor_username = null;
+      updates.assigned_at = null;
+      updates.confirmed_at = null;
+    }
 
     // Update booking
     const { data: booking, error } = await supabase
@@ -1019,6 +1553,158 @@ app.get("/make-server-34100c2d/roles", requireAuth, async (c) => {
     return c.json({ error: "Failed to fetch roles: " + error.message }, 500);
   }
 });
+
+app.get("/make-server-34100c2d/available-doctors", requireAuth, async (c) => {
+  try {
+    const date = c.req.query("date") || "";
+    const time = c.req.query("time") || "";
+
+    if (!date || !time) {
+      return c.json({ error: "date and time query params required" }, 400);
+    }
+
+    const supabase = getSupabaseClient();
+    const bookingDatePart = getDatePartFromIso(date);
+
+    const { data: doctors, error: doctorsError } = await supabase
+      .from("admin_users")
+      .select("id, username")
+      .eq("role", "doctor")
+      .eq("is_available", true)
+      .order("username", { ascending: true });
+
+    if (doctorsError) throw doctorsError;
+
+    const { data: conflicts } = await supabase
+      .from("bookings")
+      .select("assigned_doctor_id")
+      .gte("date", `${bookingDatePart}T00:00:00`)
+      .lt("date", `${bookingDatePart}T23:59:59`)
+      .eq("time", time)
+      .in("status", ["confirmed", "completed"])
+      .not("assigned_doctor_id", "is", null);
+
+    const busyIds = new Set(
+      (conflicts || []).map((b: any) => Number(b.assigned_doctor_id)),
+    );
+    const available = (doctors || []).filter((d: any) => !busyIds.has(d.id));
+
+    return c.json({ success: true, doctors: available });
+  } catch (error) {
+    console.error("Available doctors error:", error);
+    return c.json({ error: "Failed to fetch available doctors" }, 500);
+  }
+});
+
+app.get("/make-server-34100c2d/doctors", requireAuth, async (c) => {
+  try {
+    const user = c.get("user");
+    const isDoctor = normalizeRoleValue(user?.role) === "doctor";
+    const canManageUsers = hasPermission(
+      user?.permissions || {},
+      "users.manage",
+    );
+    const isAdmin = normalizeRoleValue(user?.role) === "admin";
+
+    if (!isDoctor && !canManageUsers && !isAdmin) {
+      return c.json({ error: "Forbidden" }, 403);
+    }
+
+    const supabase = getSupabaseClient();
+    let query = supabase
+      .from("admin_users")
+      .select("id, username, role, is_available")
+      .eq("role", "doctor")
+      .order("username", { ascending: true });
+
+    if (isDoctor) {
+      query = query.eq("id", Number(user?.id));
+    }
+
+    const { data, error } = await query;
+    if (error) {
+      throw error;
+    }
+
+    return c.json({ success: true, doctors: data || [] });
+  } catch (error) {
+    console.error("Get doctors error:", error);
+    return c.json({ error: "Failed to fetch doctors: " + error.message }, 500);
+  }
+});
+
+app.put(
+  "/make-server-34100c2d/doctors/:id/availability",
+  requireAuth,
+  async (c) => {
+    try {
+      const doctorId = Number(c.req.param("id"));
+      const { isAvailable } = await c.req.json();
+      const user = c.get("user");
+
+      if (typeof isAvailable !== "boolean") {
+        return c.json({ error: "isAvailable must be a boolean" }, 400);
+      }
+
+      const isDoctor = normalizeRoleValue(user?.role) === "doctor";
+      const canManageUsers = hasPermission(
+        user?.permissions || {},
+        "users.manage",
+      );
+      const isAdmin = normalizeRoleValue(user?.role) === "admin";
+
+      if (isDoctor && Number(user?.id) !== doctorId) {
+        return c.json(
+          { error: "Doctors can only change their own availability" },
+          403,
+        );
+      }
+
+      if (!isDoctor && !canManageUsers && !isAdmin) {
+        return c.json({ error: "Forbidden" }, 403);
+      }
+
+      const supabase = getSupabaseClient();
+      const { data: doctor, error: doctorError } = await supabase
+        .from("admin_users")
+        .select("id, username, role")
+        .eq("id", doctorId)
+        .maybeSingle();
+
+      if (doctorError) {
+        throw doctorError;
+      }
+
+      if (!doctor || normalizeRoleValue(doctor.role) !== "doctor") {
+        return c.json({ error: "Doctor not found" }, 404);
+      }
+
+      const { error } = await supabase
+        .from("admin_users")
+        .update({ is_available: isAvailable })
+        .eq("id", doctorId);
+
+      if (error) {
+        throw error;
+      }
+
+      await supabase.from("activity_log").insert({
+        type: "doctor_availability_updated",
+        user_name: user?.username || "Admin",
+        user_role: normalizeRoleValue(user?.role),
+        description: `Doctor ${doctor.username} marked as ${isAvailable ? "available" : "on leave"}`,
+      });
+
+      return c.json({ success: true });
+    } catch (error) {
+      console.error("Update doctor availability error:", error);
+      return c.json(
+        { error: "Failed to update doctor availability: " + error.message },
+        500,
+      );
+    }
+  },
+);
 
 app.get(
   "/make-server-34100c2d/users",
@@ -1314,18 +2000,39 @@ app.get("/make-server-34100c2d/booked-slots/:date", async (c) => {
     const requestDate = new Date(dateParam).toISOString().split("T")[0];
 
     const supabase = getSupabaseClient();
-    const { data, error } = await supabase
-      .from("bookings")
-      .select("time")
-      .gte("date", `${requestDate}T00:00:00`)
-      .lt("date", `${requestDate}T23:59:59`)
-      .in("status", ["pending", "confirmed"]);
+    await releaseExpiredUncheckedInBookings(supabase);
 
-    if (error) {
-      throw error;
+    const [
+      { data: bookings, error },
+      { count: availableDoctorCount, error: doctorsError },
+    ] = await Promise.all([
+      supabase
+        .from("bookings")
+        .select("time")
+        .gte("date", `${requestDate}T00:00:00`)
+        .lt("date", `${requestDate}T23:59:59`)
+        .eq("status", "confirmed"),
+      supabase
+        .from("admin_users")
+        .select("id", { count: "exact", head: true })
+        .eq("role", "doctor")
+        .eq("is_available", true),
+    ]);
+
+    if (error || doctorsError) {
+      throw error || doctorsError;
     }
 
-    const bookedSlots = (data || []).map((booking) => booking.time);
+    const slotCounts = new Map<string, number>();
+    for (const booking of bookings || []) {
+      const slot = booking.time;
+      slotCounts.set(slot, (slotCounts.get(slot) || 0) + 1);
+    }
+
+    const availableCount = Number(availableDoctorCount || 0);
+    const bookedSlots = Array.from(slotCounts.entries())
+      .filter(([, count]) => availableCount > 0 && count >= availableCount)
+      .map(([slot]) => slot);
 
     return c.json({ success: true, bookedSlots });
   } catch (error) {
