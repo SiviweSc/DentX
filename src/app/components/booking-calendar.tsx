@@ -243,6 +243,9 @@ export function BookingCalendar({
   );
   const [showDetails, setShowDetails] = useState(false);
   const [showCreateDialog, setShowCreateDialog] = useState(false);
+  const [showSameDayConflictDialog, setShowSameDayConflictDialog] =
+    useState(false);
+  const [sameDayConflictTimes, setSameDayConflictTimes] = useState("");
   const [showRescheduleForm, setShowRescheduleForm] = useState(false);
   const [rescheduleDate, setRescheduleDate] = useState("");
   const [rescheduleTime, setRescheduleTime] = useState("");
@@ -488,6 +491,96 @@ export function BookingCalendar({
     }));
   };
 
+  const submitCreateBookingRequest = async (options?: {
+    allowAdditionalSession?: boolean;
+    cancelPreviousSameDay?: boolean;
+  }) => {
+    let lastResponse: Response | null = null;
+    const requestBody = {
+      serviceType: createBookingForm.serviceType,
+      practitionerType: createBookingForm.practitionerType,
+      date: `${createBookingForm.date}T09:00:00`,
+      time: createBookingForm.time,
+      reason: createBookingForm.reason || "",
+      firstName: createBookingForm.firstName,
+      lastName: createBookingForm.lastName,
+      email: createBookingForm.email || "",
+      phone: createBookingForm.phone,
+      idNumber: createBookingForm.idNumber || "",
+      medicalAid: createBookingForm.medicalAid || "",
+      medicalAidNumber: createBookingForm.medicalAidNumber || "",
+      source: "admin-calendar",
+      createdAt: createBookingForm.createdAt
+        ? new Date(createBookingForm.createdAt).toISOString()
+        : undefined,
+      assignedDoctorId: createBookingForm.assignedDoctorId
+        ? Number(createBookingForm.assignedDoctorId)
+        : undefined,
+      allowAdditionalSession: options?.allowAdditionalSession,
+      cancelPreviousSameDay: options?.cancelPreviousSameDay,
+    };
+
+    for (const baseUrl of supabaseAdminApiBaseUrls) {
+      const response = await fetch(`${baseUrl}/bookings`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(requestBody),
+      });
+
+      lastResponse = response;
+      if (response.status !== 404) {
+        break;
+      }
+    }
+
+    if (!lastResponse) {
+      return {
+        ok: false,
+        data: { error: "No response from create booking endpoint" },
+      };
+    }
+
+    const data = await lastResponse.json();
+    return {
+      ok: lastResponse.ok && data?.success,
+      data,
+      status: lastResponse.status,
+    };
+  };
+
+  const handleSameDayConflictDecision = async (
+    cancelPreviousSameDay: boolean,
+  ) => {
+    try {
+      setCreatingBooking(true);
+      setShowSameDayConflictDialog(false);
+
+      const result = await submitCreateBookingRequest({
+        cancelPreviousSameDay,
+        allowAdditionalSession: !cancelPreviousSameDay,
+      });
+
+      if (!result.ok) {
+        console.error("Error creating booking:", result.data);
+        toast.error(result.data?.error || "Failed to create booking");
+        return;
+      }
+
+      toast.success("Booking created for the selected slot");
+      setShowCreateDialog(false);
+      setCreateBookingForm(INITIAL_CREATE_FORM);
+      setSameDayConflictTimes("");
+      await fetchBookings();
+    } catch (error) {
+      console.error("Error creating booking:", error);
+      toast.error("Failed to create booking");
+    } finally {
+      setCreatingBooking(false);
+    }
+  };
+
   const handleCreateBooking = async () => {
     if (
       !createBookingForm.firstName ||
@@ -540,53 +633,33 @@ export function BookingCalendar({
     try {
       setCreatingBooking(true);
 
-      let lastResponse: Response | null = null;
-      const requestBody = {
-        serviceType: createBookingForm.serviceType,
-        practitionerType: createBookingForm.practitionerType,
-        date: `${createBookingForm.date}T09:00:00`,
-        time: createBookingForm.time,
-        reason: createBookingForm.reason || "",
-        firstName: createBookingForm.firstName,
-        lastName: createBookingForm.lastName,
-        email: createBookingForm.email || "",
-        phone: createBookingForm.phone,
-        idNumber: createBookingForm.idNumber || "",
-        medicalAid: createBookingForm.medicalAid || "",
-        medicalAidNumber: createBookingForm.medicalAidNumber || "",
-        source: "admin-calendar",
-        createdAt: createBookingForm.createdAt
-          ? new Date(createBookingForm.createdAt).toISOString()
-          : undefined,
-        assignedDoctorId: createBookingForm.assignedDoctorId
-          ? Number(createBookingForm.assignedDoctorId)
-          : undefined,
-      };
+      let result = await submitCreateBookingRequest();
 
-      for (const baseUrl of supabaseAdminApiBaseUrls) {
-        const response = await fetch(`${baseUrl}/bookings`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify(requestBody),
-        });
+      if (!result.ok && result.status === 409) {
+        if (result.data?.code === "CLIENT_ALREADY_BOOKED_SAME_SLOT") {
+          toast.error(
+            "This client already has a booking for this exact slot. Choose a different time.",
+          );
+          return;
+        }
 
-        lastResponse = response;
-        if (response.status !== 404) {
-          break;
+        if (result.data?.code === "CLIENT_HAS_OTHER_SLOT_SAME_DAY") {
+          const existingTimes = Array.isArray(result.data?.existingBookings)
+            ? result.data.existingBookings
+                .map((booking: any) => booking?.time)
+                .filter(Boolean)
+                .join(", ")
+            : "another slot";
+
+          setSameDayConflictTimes(existingTimes);
+          setShowSameDayConflictDialog(true);
+          return;
         }
       }
 
-      if (!lastResponse) {
-        toast.error("No response from create booking endpoint");
-        return;
-      }
-
-      const data = await lastResponse.json();
-      if (!lastResponse.ok || !data?.success) {
-        console.error("Error creating booking:", data);
-        toast.error(data?.error || "Failed to create booking");
+      if (!result.ok) {
+        console.error("Error creating booking:", result.data);
+        toast.error(result.data?.error || "Failed to create booking");
         return;
       }
 
@@ -1046,6 +1119,8 @@ export function BookingCalendar({
           setShowCreateDialog(open);
           if (!open) {
             setCreateBookingForm(INITIAL_CREATE_FORM);
+            setShowSameDayConflictDialog(false);
+            setSameDayConflictTimes("");
           }
         }}
       >
@@ -1328,6 +1403,57 @@ export function BookingCalendar({
                 {creatingBooking ? "Creating..." : "Create Booking"}
               </Button>
             </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={showSameDayConflictDialog}
+        onOpenChange={(open) => {
+          setShowSameDayConflictDialog(open);
+          if (!open) {
+            setSameDayConflictTimes("");
+          }
+        }}
+      >
+        <DialogContent className="w-[calc(100vw-1rem)] sm:w-[92vw] max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Existing Same-Day Booking Found</DialogTitle>
+            <DialogDescription>
+              This client already has booking(s) on {createBookingForm.date} at{" "}
+              {sameDayConflictTimes || "another slot"}.
+            </DialogDescription>
+          </DialogHeader>
+
+          <p className="text-sm text-gray-600">
+            Choose whether to cancel the previous same-day booking(s) and
+            replace them with this slot, or keep both sessions for the day.
+          </p>
+
+          <div className="flex flex-col-reverse sm:flex-row sm:justify-end gap-2 pt-2">
+            <Button
+              variant="outline"
+              onClick={() => {
+                setShowSameDayConflictDialog(false);
+                setSameDayConflictTimes("");
+              }}
+            >
+              Back to Form
+            </Button>
+            <Button
+              variant="outline"
+              onClick={() => void handleSameDayConflictDecision(false)}
+              disabled={creatingBooking}
+            >
+              Keep Both Sessions
+            </Button>
+            <Button
+              onClick={() => void handleSameDayConflictDecision(true)}
+              disabled={creatingBooking}
+              className="bg-[#9A7B1D] hover:bg-[#7d6418]"
+            >
+              Cancel Previous and Replace
+            </Button>
           </div>
         </DialogContent>
       </Dialog>

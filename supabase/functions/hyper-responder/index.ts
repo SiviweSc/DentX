@@ -596,6 +596,38 @@ const ensurePatientExistsForBooking = async (supabase: any, booking: any) => {
   }
 };
 
+const isSameClientBooking = (candidate: any, incoming: any) => {
+  const candidateId = String(candidate?.id_number || "").trim();
+  const incomingId = String(
+    incoming?.idNumber || incoming?.id_number || "",
+  ).trim();
+
+  if (incomingId && candidateId && candidateId === incomingId) {
+    return true;
+  }
+
+  const incomingPhone = normalizePhoneValue(incoming?.phone || "");
+  const candidatePhone = normalizePhoneValue(candidate?.phone || "");
+  const incomingFirstName = normalizeTextValue(
+    incoming?.firstName || incoming?.first_name || "",
+  );
+  const incomingLastName = normalizeTextValue(
+    incoming?.lastName || incoming?.last_name || "",
+  );
+  const candidateFirstName = normalizeTextValue(candidate?.first_name || "");
+  const candidateLastName = normalizeTextValue(candidate?.last_name || "");
+
+  return (
+    incomingPhone &&
+    candidatePhone &&
+    incomingPhone === candidatePhone &&
+    incomingFirstName &&
+    incomingLastName &&
+    incomingFirstName === candidateFirstName &&
+    incomingLastName === candidateLastName
+  );
+};
+
 const normalizeAvailabilityConfig = (config: any) => {
   const normalized = JSON.parse(JSON.stringify(DEFAULT_AVAILABILITY_CONFIG));
 
@@ -942,6 +974,90 @@ app.post("/make-server-34100c2d/bookings", async (c) => {
       !isTimeWithinOperatingHours(availabilityConfig, bookingDate, bookingTime)
     ) {
       return c.json({ error: "That time is outside operating hours" }, 400);
+    }
+
+    const allowAdditionalSession =
+      bookingData.allowAdditionalSession === true ||
+      bookingData.allow_additional_session === true;
+    const cancelPreviousSameDay =
+      bookingData.cancelPreviousSameDay === true ||
+      bookingData.cancel_previous_same_day === true;
+
+    const { data: sameDayCandidates, error: sameDayCandidatesError } =
+      await supabase
+        .from("bookings")
+        .select(
+          "id, first_name, last_name, phone, id_number, date, time, status, service_type",
+        )
+        .gte("date", `${bookingDatePart}T00:00:00`)
+        .lt("date", `${bookingDatePart}T23:59:59`)
+        .in("status", ["pending", "confirmed", "completed"])
+        .order("time", { ascending: true });
+
+    if (sameDayCandidatesError) {
+      throw sameDayCandidatesError;
+    }
+
+    const sameClientSameDayBookings = (sameDayCandidates || []).filter(
+      (candidate: any) => isSameClientBooking(candidate, bookingData),
+    );
+
+    const sameClientSameSlotBookings = sameClientSameDayBookings.filter(
+      (candidate: any) =>
+        normalizeTimeValue(candidate.time, "") === bookingTime,
+    );
+
+    if (sameClientSameSlotBookings.length > 0) {
+      return c.json(
+        {
+          error: "This client already has a booking for that slot",
+          code: "CLIENT_ALREADY_BOOKED_SAME_SLOT",
+          existingBookings: sameClientSameSlotBookings,
+        },
+        409,
+      );
+    }
+
+    if (
+      sameClientSameDayBookings.length > 0 &&
+      !allowAdditionalSession &&
+      !cancelPreviousSameDay
+    ) {
+      return c.json(
+        {
+          error:
+            "This client already has another booking on this day. Choose whether to cancel previous slot(s) or keep both sessions.",
+          code: "CLIENT_HAS_OTHER_SLOT_SAME_DAY",
+          existingBookings: sameClientSameDayBookings,
+        },
+        409,
+      );
+    }
+
+    if (cancelPreviousSameDay && sameClientSameDayBookings.length > 0) {
+      const cancellableBookingIds = sameClientSameDayBookings
+        .filter((candidate: any) =>
+          ["pending", "confirmed"].includes(String(candidate.status || "")),
+        )
+        .map((candidate: any) => candidate.id)
+        .filter(Boolean);
+
+      if (cancellableBookingIds.length > 0) {
+        const { error: cancelError } = await supabase
+          .from("bookings")
+          .update({
+            status: "cancelled",
+            cancellation_reason:
+              "Cancelled to allow replacement booking on the same day",
+            cancelled_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          })
+          .in("id", cancellableBookingIds);
+
+        if (cancelError) {
+          throw cancelError;
+        }
+      }
     }
 
     const createdAtValue = bookingData.createdAt || bookingData.created_at;
