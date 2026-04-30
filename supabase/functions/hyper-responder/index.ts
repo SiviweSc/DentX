@@ -1303,7 +1303,7 @@ app.post("/make-server-34100c2d/medical-intake", async (c) => {
       return c.json({ error: "Booking not found" }, 404);
     }
 
-    // Try to find existing patient by id_number, phone, or name
+    // Try to find existing patient by id_number, then strict full-name + phone
     let patientId: string | null = null;
     const idNumber = formData.patient_id_number || booking.id_number;
     const phone = formData.patient_cell || booking.phone;
@@ -1323,16 +1323,29 @@ app.post("/make-server-34100c2d/medical-intake", async (c) => {
       }
     }
 
-    // If not found, search by phone
+    // If not found, search by strict full-name + phone to avoid collisions on shared numbers
     if (!patientId && phone) {
-      const { data: existingPatient } = await supabase
-        .from("patients")
-        .select("id")
-        .eq("phone", phone)
-        .maybeSingle();
+      const normalizedPhone = normalizePhoneValue(phone || "");
+      const normalizedFirstName = normalizeTextValue(firstName || "");
+      const normalizedLastName = normalizeTextValue(lastName || "");
 
-      if (existingPatient) {
-        patientId = existingPatient.id;
+      const { data: nameMatchedPatients } = await supabase
+        .from("patients")
+        .select("id, first_name, last_name, phone")
+        .ilike("first_name", firstName || "")
+        .ilike("last_name", lastName || "")
+        .limit(100);
+
+      const matchedByNameAndPhone = (nameMatchedPatients || []).find(
+        (patient: any) =>
+          normalizePhoneValue(patient.phone || "") === normalizedPhone &&
+          normalizeTextValue(patient.first_name || "") ===
+            normalizedFirstName &&
+          normalizeTextValue(patient.last_name || "") === normalizedLastName,
+      );
+
+      if (matchedByNameAndPhone) {
+        patientId = matchedByNameAndPhone.id;
       }
     }
 
@@ -1553,63 +1566,61 @@ app.put("/make-server-34100c2d/bookings/:id", requireAuth, async (c) => {
         : null;
       delete updates.doctor_id;
 
-      let assignedDoctor: { id: number; username: string } | null = null;
-
-      if (requestedDoctorId) {
-        // Validate the requested doctor is available and not double-booked
-        const bookingDatePart = getDatePartFromIso(existingBooking.date);
-        const bookingTime = normalizeTimeValue(
-          updates?.time || existingBooking.time,
-          existingBooking.time,
-        );
-
-        const { data: doctorRow } = await supabase
-          .from("admin_users")
-          .select("id, username, is_available")
-          .eq("id", requestedDoctorId)
-          .eq("role", "doctor")
-          .maybeSingle();
-
-        if (!doctorRow) {
-          return c.json({ error: "Doctor not found" }, 404);
-        }
-        if (!doctorRow.is_available) {
-          return c.json(
-            { error: "The selected doctor is currently unavailable" },
-            409,
-          );
-        }
-
-        const { data: conflict } = await supabase
-          .from("bookings")
-          .select("id")
-          .gte("date", `${bookingDatePart}T00:00:00`)
-          .lt("date", `${bookingDatePart}T23:59:59`)
-          .eq("time", bookingTime)
-          .eq("assigned_doctor_id", requestedDoctorId)
-          .in("status", ["confirmed", "completed"])
-          .neq("id", existingBooking.id)
-          .limit(1);
-
-        if (conflict && conflict.length > 0) {
-          return c.json(
-            { error: "The selected doctor already has a booking at this time" },
-            409,
-          );
-        }
-
-        assignedDoctor = { id: doctorRow.id, username: doctorRow.username };
-      } else {
-        assignedDoctor = await pickDoctorForBooking(
-          supabase,
-          existingBooking.date,
-          normalizeTimeValue(
-            updates?.time || existingBooking.time,
-            existingBooking.time,
-          ),
-          existingBooking.assigned_doctor_id,
+      if (!requestedDoctorId) {
+        return c.json(
+          {
+            error: "Doctor selection is required to confirm this booking",
+            code: "DOCTOR_SELECTION_REQUIRED",
+          },
+          400,
         );
       }
+
+      let assignedDoctor: { id: number; username: string } | null = null;
+
+      // Validate the requested doctor is available and not double-booked
+      const bookingDatePart = getDatePartFromIso(existingBooking.date);
+      const bookingTime = normalizeTimeValue(
+        updates?.time || existingBooking.time,
+        existingBooking.time,
+      );
+
+      const { data: doctorRow } = await supabase
+        .from("admin_users")
+        .select("id, username, is_available")
+        .eq("id", requestedDoctorId)
+        .eq("role", "doctor")
+        .maybeSingle();
+
+      if (!doctorRow) {
+        return c.json({ error: "Doctor not found" }, 404);
+      }
+      if (!doctorRow.is_available) {
+        return c.json(
+          { error: "The selected doctor is currently unavailable" },
+          409,
+        );
+      }
+
+      const { data: conflict } = await supabase
+        .from("bookings")
+        .select("id")
+        .gte("date", `${bookingDatePart}T00:00:00`)
+        .lt("date", `${bookingDatePart}T23:59:59`)
+        .eq("time", bookingTime)
+        .eq("assigned_doctor_id", requestedDoctorId)
+        .in("status", ["confirmed", "completed"])
+        .neq("id", existingBooking.id)
+        .limit(1);
+
+      if (conflict && conflict.length > 0) {
+        return c.json(
+          { error: "The selected doctor already has a booking at this time" },
+          409,
+        );
+      }
+
+      assignedDoctor = { id: doctorRow.id, username: doctorRow.username };
 
       if (!assignedDoctor) {
         return c.json(

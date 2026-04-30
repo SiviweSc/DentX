@@ -1227,6 +1227,11 @@ function BookingsContent({
     const booking = confirmingBooking;
     if (!booking) return;
 
+    if (!selectedDoctorId) {
+      toast.error("Select a doctor before confirming this booking");
+      return;
+    }
+
     try {
       const normalizePhone = (value: string) =>
         String(value || "")
@@ -1302,7 +1307,7 @@ function BookingsContent({
       }
 
       const body: any = { status: "confirmed" };
-      if (selectedDoctorId) body.doctor_id = selectedDoctorId;
+      body.doctor_id = selectedDoctorId;
 
       const response = await apiFetchAuth(`/bookings/${booking.id}`, {
         method: "PUT",

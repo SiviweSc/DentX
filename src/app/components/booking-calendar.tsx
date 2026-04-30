@@ -246,6 +246,12 @@ export function BookingCalendar({
   const [showSameDayConflictDialog, setShowSameDayConflictDialog] =
     useState(false);
   const [sameDayConflictTimes, setSameDayConflictTimes] = useState("");
+  const [showConfirmDoctorDialog, setShowConfirmDoctorDialog] = useState(false);
+  const [confirmDoctorOptions, setConfirmDoctorOptions] = useState<
+    DoctorOption[]
+  >([]);
+  const [confirmDoctorId, setConfirmDoctorId] = useState("");
+  const [loadingConfirmDoctors, setLoadingConfirmDoctors] = useState(false);
   const [showRescheduleForm, setShowRescheduleForm] = useState(false);
   const [rescheduleDate, setRescheduleDate] = useState("");
   const [rescheduleTime, setRescheduleTime] = useState("");
@@ -737,6 +743,77 @@ export function BookingCalendar({
         return;
       }
 
+      setShowConfirmDoctorDialog(true);
+      setConfirmDoctorId("");
+      setConfirmDoctorOptions([]);
+      setLoadingConfirmDoctors(true);
+
+      let lastResponse: Response | null = null;
+      for (const baseUrl of supabaseAdminApiBaseUrls) {
+        const response = await fetch(
+          `${baseUrl}/available-doctors?date=${encodeURIComponent(selectedBooking.date_str || "")}&time=${encodeURIComponent(selectedBooking.time_str || "")}`,
+          {
+            headers: {
+              Authorization: `Basic ${authToken}`,
+            },
+          },
+        );
+
+        lastResponse = response;
+        if (response.status !== 404) {
+          break;
+        }
+      }
+
+      if (!lastResponse || !lastResponse.ok) {
+        toast.error("Failed to load available doctors");
+        setShowConfirmDoctorDialog(false);
+        return;
+      }
+
+      const data = await lastResponse.json();
+      const doctors = Array.isArray(data?.doctors)
+        ? data.doctors
+            .filter((doctor: any) => Number.isInteger(Number(doctor?.id)))
+            .map((doctor: any) => ({
+              id: Number(doctor.id),
+              username: String(doctor.username || "Doctor"),
+            }))
+        : [];
+
+      setConfirmDoctorOptions(doctors);
+
+      if (doctors.length === 0) {
+        toast.error("No available doctor for this slot");
+      }
+    } catch (err) {
+      console.error("Error:", err);
+      toast.error("Failed to load available doctors");
+      setShowConfirmDoctorDialog(false);
+    } finally {
+      setLoadingConfirmDoctors(false);
+    }
+  };
+
+  const handleConfirmBookingSubmit = async () => {
+    if (!selectedBooking) return;
+
+    if (!canConfirmBooking) {
+      toast.error("You do not have permission to confirm bookings");
+      return;
+    }
+
+    if (!confirmDoctorId) {
+      toast.error("Select a doctor before confirming this booking");
+      return;
+    }
+
+    try {
+      if (!authToken) {
+        toast.error("Missing authentication token");
+        return;
+      }
+
       let lastResponse: Response | null = null;
       for (const baseUrl of supabaseAdminApiBaseUrls) {
         const response = await fetch(
@@ -747,7 +824,10 @@ export function BookingCalendar({
               "Content-Type": "application/json",
               Authorization: `Basic ${authToken}`,
             },
-            body: JSON.stringify({ status: "confirmed" }),
+            body: JSON.stringify({
+              status: "confirmed",
+              doctor_id: Number(confirmDoctorId),
+            }),
           },
         );
 
@@ -769,6 +849,9 @@ export function BookingCalendar({
       }
 
       toast.success("Booking confirmed");
+      setShowConfirmDoctorDialog(false);
+      setConfirmDoctorId("");
+      setConfirmDoctorOptions([]);
       setShowDetails(false);
       setSelectedBooking(null);
       fetchBookings();
@@ -1683,6 +1766,71 @@ export function BookingCalendar({
               )}
             </div>
           )}
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={showConfirmDoctorDialog}
+        onOpenChange={(open) => {
+          setShowConfirmDoctorDialog(open);
+          if (!open) {
+            setConfirmDoctorId("");
+            setConfirmDoctorOptions([]);
+          }
+        }}
+      >
+        <DialogContent className="w-[calc(100vw-1rem)] sm:w-[92vw] max-w-md">
+          <DialogHeader>
+            <DialogTitle>Select Doctor to Confirm</DialogTitle>
+            <DialogDescription>
+              Choose the doctor for this booking before confirming.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-3">
+            <label className="block text-sm font-medium text-gray-700">
+              Available Doctors
+            </label>
+            <select
+              value={confirmDoctorId}
+              onChange={(e) => setConfirmDoctorId(e.target.value)}
+              disabled={loadingConfirmDoctors}
+              className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#9A7B1D]"
+            >
+              <option value="">Select doctor</option>
+              {confirmDoctorOptions.map((doctor) => (
+                <option key={doctor.id} value={String(doctor.id)}>
+                  Dr. {doctor.username}
+                </option>
+              ))}
+            </select>
+
+            {loadingConfirmDoctors && (
+              <p className="text-xs text-gray-500">Loading doctors...</p>
+            )}
+
+            {!loadingConfirmDoctors && confirmDoctorOptions.length === 0 && (
+              <p className="text-xs text-amber-700">
+                No doctor is currently available for this slot.
+              </p>
+            )}
+          </div>
+
+          <div className="flex flex-col-reverse sm:flex-row sm:justify-end gap-2 pt-2">
+            <Button
+              variant="outline"
+              onClick={() => setShowConfirmDoctorDialog(false)}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={() => void handleConfirmBookingSubmit()}
+              disabled={loadingConfirmDoctors || !confirmDoctorId}
+              className="bg-green-600 hover:bg-green-700"
+            >
+              Confirm Booking
+            </Button>
+          </div>
         </DialogContent>
       </Dialog>
     </div>

@@ -1134,7 +1134,7 @@ function AccessPortalContent({ onClose, onLoginSuccess }: AccessPortalProps) {
         <div className="fixed bottom-0 left-0 right-0 pb-4 text-center">
           <p className="text-sm text-gray-500">
             <span className="font-bold text-gray-700">
-              A System bt Test Africa Projects
+              A System by Test Africa Projects
             </span>
           </p>
         </div>

@@ -116,15 +116,15 @@ export function Services({ onBookNow }: ServicesProps) {
                     isSingleItem ? "w-full max-w-sm" : ""
                   }`}
                 >
-                  <CardHeader>
+                  <CardHeader className="text-center">
                     <div
-                      className={`w-12 h-12 rounded-lg bg-[#F5F1E8] flex items-center justify-center mb-4 ${service.color}`}
+                      className={`w-12 h-12 rounded-lg bg-[#F5F1E8] flex items-center justify-center mb-4 mx-auto ${service.color}`}
                     >
                       <Icon className="w-6 h-6" />
                     </div>
                     <CardTitle className="text-xl">{service.title}</CardTitle>
                   </CardHeader>
-                  <CardContent>
+                  <CardContent className="text-center">
                     <CardDescription className="text-gray-600">
                       {service.description}
                     </CardDescription>
