@@ -948,6 +948,12 @@ app.post("/make-server-34100c2d/bookings", async (c) => {
     const availabilityConfig = await fetchAvailabilityConfigFromDb(supabase);
     const bookingDatePart = getDatePart(bookingData.date);
     const bookingTime = normalizeTimeValue(bookingData.time, "");
+    const bookingSource = String(bookingData.source || "website");
+    const isWalkInSource = bookingSource.startsWith("walk-in");
+    const shouldConfirmImmediately =
+      isWalkInSource &&
+      (bookingData.confirmedByAdmin === true ||
+        bookingData.confirmed_by_admin === true);
 
     if (!bookingDatePart || !bookingTime) {
       return c.json({ error: "Invalid booking date or time" }, 400);
@@ -974,6 +980,33 @@ app.post("/make-server-34100c2d/bookings", async (c) => {
       !isTimeWithinOperatingHours(availabilityConfig, bookingDate, bookingTime)
     ) {
       return c.json({ error: "That time is outside operating hours" }, 400);
+    }
+
+    if (shouldConfirmImmediately) {
+      const { data: slotPendingBookings, error: slotPendingBookingsError } =
+        await supabase
+          .from("bookings")
+          .select("id")
+          .gte("date", `${bookingDatePart}T00:00:00`)
+          .lt("date", `${bookingDatePart}T23:59:59`)
+          .eq("time", bookingTime)
+          .eq("status", "pending")
+          .limit(1);
+
+      if (slotPendingBookingsError) {
+        throw slotPendingBookingsError;
+      }
+
+      if ((slotPendingBookings || []).length > 0) {
+        return c.json(
+          {
+            error:
+              "This slot already has a pending booking, so this walk-in cannot be auto-confirmed.",
+            code: "SLOT_HAS_PENDING_BOOKING",
+          },
+          409,
+        );
+      }
     }
 
     const allowAdditionalSession =
@@ -1117,8 +1150,11 @@ app.post("/make-server-34100c2d/bookings", async (c) => {
         id_number: bookingData.idNumber || "",
         medical_aid: bookingData.medicalAid || "",
         medical_aid_number: bookingData.medicalAidNumber || "",
-        source: bookingData.source || "website",
-        status: "pending",
+        source: bookingSource,
+        status: shouldConfirmImmediately ? "confirmed" : "pending",
+        confirmed_at: shouldConfirmImmediately
+          ? createdAtIso || new Date().toISOString()
+          : null,
         assigned_doctor_id: assignedDoctorId,
         assigned_doctor_username: assignedDoctorUsername,
         assigned_at: assignedDoctorId

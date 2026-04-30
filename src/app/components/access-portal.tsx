@@ -61,7 +61,10 @@ type MedicalFormOrigin =
   | "walkin-type"
   | "returning-search"
   | "new-details";
-type MedicalIntakeOrigin = "online-checkin" | "medical-form-search";
+type MedicalIntakeOrigin =
+  | "online-checkin"
+  | "medical-form-search"
+  | "walkin-type";
 
 interface AccessPortalProps {
   onClose: () => void;
@@ -636,6 +639,7 @@ function AccessPortalContent({ onClose, onLoginSuccess }: AccessPortalProps) {
         medicalAid: details.medicalAid,
         medicalAidNumber: details.medicalAidNumber,
         source,
+        confirmedByAdmin: true,
       };
 
       const response = await apiFetchPublic(`/bookings`, {
@@ -650,10 +654,35 @@ function AccessPortalContent({ onClose, onLoginSuccess }: AccessPortalProps) {
         throw new Error("No response from booking endpoint");
       }
 
-      await parseApiResponse(response, "Create booking endpoint");
-      toast.success(
-        "Walk-in slot booked. Admin must confirm the booking before the form can be filled.",
-      );
+      const data = await parseApiResponse(response, "Create booking endpoint");
+
+      if (source === "walk-in-new") {
+        const booking = data?.booking || {};
+        const patientName = `${details.firstName} ${details.lastName}`.trim();
+
+        setMedicalIntakeContext({
+          bookingId: String(booking?.id || ""),
+          patientName: patientName || "Patient",
+          initialData: {
+            patient_first_name: details.firstName || "",
+            patient_surname: details.lastName || "",
+            patient_cell: details.phone || "",
+            patient_email: details.email || "",
+            patient_id_number: details.idNumber || "",
+            medical_aid_name: details.medicalAid || "",
+            medical_aid_number: details.medicalAidNumber || "",
+          },
+        });
+
+        toast.success(
+          "Walk-in booking confirmed. Please complete the new client medical form.",
+        );
+        setMedicalIntakeOrigin("walkin-type");
+        setScreen("medical-intake");
+        return;
+      }
+
+      toast.success("Walk-in booking confirmed.");
 
       setSearchTerm("");
       setSearchResults([]);
@@ -1081,22 +1110,10 @@ function AccessPortalContent({ onClose, onLoginSuccess }: AccessPortalProps) {
             Welcome to DentX Access Portal
           </h1>
           <p className="text-center text-gray-500 mb-8">
-            Continue as admin, walk-in client, or online check-in
+            Continue as walk-in client or online check-in
           </p>
 
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <button
-              type="button"
-              onClick={() => setScreen("admin-login")}
-              className="rounded-xl border border-gray-200 bg-white p-6 text-left hover:border-[#9A7B1D]"
-            >
-              <Lock className="w-6 h-6 text-[#9A7B1D] mb-3" />
-              <h2 className="text-lg text-gray-900 mb-1">Admin Login</h2>
-              <p className="text-sm text-gray-500">
-                Access the full admin dashboard.
-              </p>
-            </button>
-
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <button
               type="button"
               onClick={() => setScreen("walkin-type")}
@@ -1131,12 +1148,20 @@ function AccessPortalContent({ onClose, onLoginSuccess }: AccessPortalProps) {
       )}
 
       {screen === "select-role" && (
-        <div className="fixed bottom-0 left-0 right-0 pb-4 text-center">
+        <div className="fixed bottom-0 left-0 right-0 pb-4 px-4 sm:px-6 text-center">
           <p className="text-sm text-gray-500">
-            <span className="font-bold text-gray-700">
+            <span className="text-gray-700">
               A System by Test Africa Projects
             </span>
           </p>
+
+          <button
+            type="button"
+            onClick={() => setScreen("admin-login")}
+            className="absolute bottom-4 right-4 sm:right-6 text-xs text-gray-500 hover:text-[#9A7B1D] underline-offset-2 hover:underline"
+          >
+            Staff access
+          </button>
         </div>
       )}
 
@@ -1186,10 +1211,10 @@ function AccessPortalContent({ onClose, onLoginSuccess }: AccessPortalProps) {
             Walk-in Client Type
           </h2>
           <p className="text-gray-500 text-center mb-8">
-            Select returning client or new client.
+            Select returning client or fill medical form for a new client.
           </p>
 
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <button
               type="button"
               onClick={() => {
@@ -1211,22 +1236,6 @@ function AccessPortalContent({ onClose, onLoginSuccess }: AccessPortalProps) {
             <button
               type="button"
               onClick={() => {
-                setNewWalkInDetails(EMPTY_WALKIN_DETAILS);
-                resetWalkInSelection();
-                setScreen("new-details");
-              }}
-              className="rounded-xl border border-gray-200 bg-white p-6 text-left hover:border-[#9A7B1D]"
-            >
-              <Users className="w-6 h-6 text-[#9A7B1D] mb-3" />
-              <h3 className="text-lg text-gray-900 mb-1">New Client</h3>
-              <p className="text-sm text-gray-500">
-                Capture new patient details, then book a slot.
-              </p>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => {
                 setFormLookupQuery("");
                 setMedicalIntakeContext(null);
                 setMedicalFormOrigin("walkin-type");
@@ -1236,10 +1245,12 @@ function AccessPortalContent({ onClose, onLoginSuccess }: AccessPortalProps) {
               className="rounded-xl border border-gray-200 bg-white p-6 text-left hover:border-[#9A7B1D]"
             >
               <FileText className="w-6 h-6 text-[#9A7B1D] mb-3" />
-              <h3 className="text-lg text-gray-900 mb-1">Fill Medical Form</h3>
+              <h3 className="text-lg text-gray-900 mb-1">
+                Fill Medical Form For New Client
+              </h3>
               <p className="text-sm text-gray-500">
-                Search booking and complete the medical form once admin
-                confirms.
+                Enter phone or ID to retrieve admin-entered booking details and
+                continue to the medical form.
               </p>
             </button>
           </div>
@@ -1448,10 +1459,7 @@ function AccessPortalContent({ onClose, onLoginSuccess }: AccessPortalProps) {
       {screen === "returning-slot" &&
         renderSlotPicker(
           `Select Slot for ${(selectedPatient?.first_name || "").trim()} ${(selectedPatient?.last_name || "").trim()}`,
-          () => {
-            setPendingBookingSource("walk-in-existing");
-            setScreen("confirm-booking");
-          },
+          () => void handleCreateWalkInBooking("walk-in-existing"),
         )}
 
       {screen === "new-details" && (
@@ -1591,10 +1599,10 @@ function AccessPortalContent({ onClose, onLoginSuccess }: AccessPortalProps) {
         )}
 
       {screen === "new-slot" &&
-        renderSlotPicker("Select Slot for New Walk-in Client", () => {
-          setPendingBookingSource("walk-in-new");
-          setScreen("confirm-booking");
-        })}
+        renderSlotPicker(
+          "Select Slot for New Walk-in Client",
+          () => void handleCreateWalkInBooking("walk-in-new"),
+        )}
 
       {screen === "confirm-booking" && (
         <div className="max-w-3xl mx-auto px-4 sm:px-6 py-10">
