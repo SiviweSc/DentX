@@ -3099,14 +3099,32 @@ app.get("/make-server-34100c2d/eligible-doctors", async (c) => {
 app.get("/make-server-34100c2d/doctors", requireAuth, async (c) => {
   try {
     const user = c.get("user");
+    const scope = String(c.req.query("scope") || "")
+      .trim()
+      .toLowerCase();
+    const requestAllDoctors = scope === "all";
     const isDoctor = normalizeRoleValue(user?.role) === "doctor";
     const canManageUsers = hasPermission(
       user?.permissions || {},
       "users.manage",
     );
+    const canConfirmBookings = hasPermission(
+      user?.permissions || {},
+      "bookings.confirm",
+    );
+    const canCompleteBookings = hasPermission(
+      user?.permissions || {},
+      "bookings.complete",
+    );
     const isAdmin = normalizeRoleValue(user?.role) === "admin";
 
-    if (!isDoctor && !canManageUsers && !isAdmin) {
+    if (
+      !isDoctor &&
+      !canManageUsers &&
+      !isAdmin &&
+      !canConfirmBookings &&
+      !canCompleteBookings
+    ) {
       return c.json({ error: "Forbidden" }, 403);
     }
 
@@ -3117,7 +3135,10 @@ app.get("/make-server-34100c2d/doctors", requireAuth, async (c) => {
       .eq("role", "doctor")
       .order("username", { ascending: true });
 
-    if (isDoctor) {
+    const canSeeAllDoctors =
+      isAdmin || canManageUsers || canConfirmBookings || canCompleteBookings;
+
+    if (isDoctor && (!requestAllDoctors || !canSeeAllDoctors)) {
       query = query.eq("id", Number(user?.id));
     }
 

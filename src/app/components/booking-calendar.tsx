@@ -325,7 +325,7 @@ export function BookingCalendar({
         let lastResponse: Response | null = null;
 
         for (const baseUrl of supabaseAdminApiBaseUrls) {
-          const response = await fetch(`${baseUrl}/doctors`, {
+          const response = await fetch(`${baseUrl}/doctors?scope=all`, {
             headers: {
               Authorization: `Basic ${authToken}`,
             },
@@ -488,6 +488,14 @@ export function BookingCalendar({
     openCreateDialog(slotDate, slotTime);
   };
 
+  const isCreateBookingInPast = (() => {
+    if (!createBookingForm.date || !createBookingForm.time) return false;
+    return (
+      combineDateAndTime(createBookingForm.date, createBookingForm.time) <
+      new Date()
+    );
+  })();
+
   const handleCreateBookingChange = (
     field: keyof CreateBookingForm,
     value: string,
@@ -502,6 +510,16 @@ export function BookingCalendar({
         ...prev,
         date: value,
         time: nextSlots.includes(prev.time) ? prev.time : (nextSlots[0] ?? ""),
+        assignedDoctorId: "",
+      }));
+      return;
+    }
+
+    if (field === "time") {
+      setCreateBookingForm((prev) => ({
+        ...prev,
+        time: value,
+        assignedDoctorId: "",
       }));
       return;
     }
@@ -534,9 +552,6 @@ export function BookingCalendar({
       source: "admin-calendar",
       createdAt: createBookingForm.createdAt
         ? new Date(createBookingForm.createdAt).toISOString()
-        : undefined,
-      assignedDoctorId: createBookingForm.assignedDoctorId
-        ? Number(createBookingForm.assignedDoctorId)
         : undefined,
       allowAdditionalSession: options?.allowAdditionalSession,
       cancelPreviousSameDay: options?.cancelPreviousSameDay,
@@ -590,7 +605,17 @@ export function BookingCalendar({
         return;
       }
 
-      toast.success("Booking created for the selected slot");
+      const newBookingId = result.data?.booking?.id ?? result.data?.id;
+      if (
+        isCreateBookingInPast &&
+        createBookingForm.assignedDoctorId &&
+        newBookingId
+      ) {
+        await handleAutoConfirmAndCompletePastBooking(String(newBookingId));
+        toast.success("Past booking created and marked as completed");
+      } else {
+        toast.success("Booking created for the selected slot");
+      }
       setShowCreateDialog(false);
       setCreateBookingForm(INITIAL_CREATE_FORM);
       setSameDayConflictTimes("");
@@ -652,6 +677,11 @@ export function BookingCalendar({
       return;
     }
 
+    if (isCreateBookingInPast && !createBookingForm.assignedDoctorId) {
+      toast.error("Please assign a doctor for past bookings");
+      return;
+    }
+
     try {
       setCreatingBooking(true);
 
@@ -685,7 +715,17 @@ export function BookingCalendar({
         return;
       }
 
-      toast.success("Booking created for the selected slot");
+      const newBookingId = result.data?.booking?.id ?? result.data?.id;
+      if (
+        isCreateBookingInPast &&
+        createBookingForm.assignedDoctorId &&
+        newBookingId
+      ) {
+        await handleAutoConfirmAndCompletePastBooking(String(newBookingId));
+        toast.success("Past booking created and marked as completed");
+      } else {
+        toast.success("Booking created for the selected slot");
+      }
       setShowCreateDialog(false);
       setCreateBookingForm(INITIAL_CREATE_FORM);
       await fetchBookings();
@@ -694,6 +734,52 @@ export function BookingCalendar({
       toast.error("Failed to create booking");
     } finally {
       setCreatingBooking(false);
+    }
+  };
+
+  const handleAutoConfirmAndCompletePastBooking = async (bookingId: string) => {
+    if (!authToken) return;
+
+    const doctorId = Number(createBookingForm.assignedDoctorId);
+
+    // Step 1: confirm with doctor
+    let confirmResponse: Response | null = null;
+    for (const baseUrl of supabaseAdminApiBaseUrls) {
+      const response = await fetch(`${baseUrl}/bookings/${bookingId}`, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Basic ${authToken}`,
+        },
+        body: JSON.stringify({ status: "confirmed", doctor_id: doctorId }),
+      });
+      confirmResponse = response;
+      if (response.status !== 404) break;
+    }
+
+    if (!confirmResponse || !confirmResponse.ok) {
+      const err = await confirmResponse?.json().catch(() => ({}));
+      toast.error(err?.error || "Booking created but could not auto-confirm");
+      return;
+    }
+
+    // Step 2: complete
+    let completeResponse: Response | null = null;
+    for (const baseUrl of supabaseAdminApiBaseUrls) {
+      const response = await fetch(`${baseUrl}/bookings/${bookingId}`, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Basic ${authToken}`,
+        },
+        body: JSON.stringify({ status: "completed" }),
+      });
+      completeResponse = response;
+      if (response.status !== 404) break;
+    }
+
+    if (!completeResponse || !completeResponse.ok) {
+      toast.error("Booking confirmed but could not mark as completed");
     }
   };
 
@@ -1380,33 +1466,35 @@ export function BookingCalendar({
                   className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#9A7B1D]"
                 />
               </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Assigned Doctor
-                </label>
-                <select
-                  value={createBookingForm.assignedDoctorId}
-                  onChange={(e) =>
-                    handleCreateBookingChange(
-                      "assignedDoctorId",
-                      e.target.value,
-                    )
-                  }
-                  className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#9A7B1D]"
-                >
-                  <option value="">Not assigned</option>
-                  {doctorOptions.map((doctor) => (
-                    <option key={doctor.id} value={String(doctor.id)}>
-                      Dr. {doctor.username}
-                    </option>
-                  ))}
-                </select>
-                {loadingDoctors && (
-                  <p className="mt-2 text-xs text-gray-500">
-                    Loading doctors...
-                  </p>
-                )}
-              </div>
+              {isCreateBookingInPast && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Assigned Doctor
+                  </label>
+                  <select
+                    value={createBookingForm.assignedDoctorId}
+                    onChange={(e) =>
+                      handleCreateBookingChange(
+                        "assignedDoctorId",
+                        e.target.value,
+                      )
+                    }
+                    className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#9A7B1D]"
+                  >
+                    <option value="">Not assigned</option>
+                    {doctorOptions.map((doctor) => (
+                      <option key={doctor.id} value={String(doctor.id)}>
+                        Dr. {doctor.username}
+                      </option>
+                    ))}
+                  </select>
+                  {loadingDoctors && (
+                    <p className="mt-2 text-xs text-gray-500">
+                      Loading doctors...
+                    </p>
+                  )}
+                </div>
+              )}
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -1591,7 +1679,11 @@ export function BookingCalendar({
                 disabled={creatingBooking}
                 className="bg-[#9A7B1D] hover:bg-[#7d6418]"
               >
-                {creatingBooking ? "Creating..." : "Create Booking"}
+                {creatingBooking
+                  ? "Creating..."
+                  : isCreateBookingInPast
+                    ? "Create & Complete"
+                    : "Create Booking"}
               </Button>
             </div>
           </div>
