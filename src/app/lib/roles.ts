@@ -5,6 +5,7 @@ export interface RolePermissions {
   calendar: boolean;
   bookings: boolean;
   bookingsConfirm: boolean;
+  bookingsDelete: boolean;
   patients: boolean;
   practice: boolean;
   activity: boolean;
@@ -25,6 +26,7 @@ export const EMPTY_ROLE_PERMISSIONS: RolePermissions = {
   calendar: false,
   bookings: false,
   bookingsConfirm: false,
+  bookingsDelete: false,
   patients: false,
   practice: false,
   activity: false,
@@ -66,6 +68,7 @@ export const sanitizeRolePermissions = (
   calendar: value?.calendar === true,
   bookings: value?.bookings === true,
   bookingsConfirm: value?.bookingsConfirm === true,
+  bookingsDelete: value?.bookingsDelete === true,
   patients: value?.patients === true,
   practice: value?.practice === true,
   activity: value?.activity === true,

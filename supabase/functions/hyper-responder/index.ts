@@ -3,6 +3,7 @@ import { Hono } from "npm:hono";
 import { cors } from "npm:hono/cors";
 import { logger } from "npm:hono/logger";
 import { createClient } from "jsr:@supabase/supabase-js@2.49.8";
+import { PDFDocument, StandardFonts, rgb } from "npm:pdf-lib";
 
 const app = new Hono().basePath("/hyper-responder");
 
@@ -29,11 +30,148 @@ const getSupabaseClient = () => {
   );
 };
 
+const parseHexColor = (value: unknown) => {
+  const raw = String(value ?? "").trim();
+  if (!raw) {
+    return "";
+  }
+
+  // Accept common DB input variants: #RRGGBB, RRGGBB, #RGB, RGB, 0xRRGGBB,
+  // including values wrapped in quotes or ending with delimiters.
+  const cleaned = raw.replace(/^[\s'"`]+|[\s'"`;]+$/g, "");
+  const normalized = cleaned
+    .replace(/^0x/i, "")
+    .replace(/^#/, "")
+    .toUpperCase();
+
+  if (/^[0-9A-F]{3}$/.test(normalized)) {
+    const expanded = normalized
+      .split("")
+      .map((character) => `${character}${character}`)
+      .join("");
+    return `#${expanded}`;
+  }
+
+  if (/^[0-9A-F]{6}$/.test(normalized)) {
+    return `#${normalized}`;
+  }
+
+  return "";
+};
+
+const isValidHexColor = (value: unknown) =>
+  /^#[0-9A-F]{6}$/.test(parseHexColor(value));
+
+const requireBrandingText = (value: unknown, fieldName: string) => {
+  const text = String(value || "").trim();
+  if (!text) {
+    throw new Error(`Active branding is missing '${fieldName}'`);
+  }
+  return text;
+};
+
+const requireBrandingHex = (value: unknown, fieldName: string) => {
+  const hex = parseHexColor(value);
+  if (!isValidHexColor(hex)) {
+    const receivedPreview = JSON.stringify(
+      String(value ?? "")
+        .trim()
+        .slice(0, 64),
+    );
+    throw new Error(
+      `Active branding has invalid '${fieldName}'. Expected format: #RRGGBB. Received: ${receivedPreview}`,
+    );
+  }
+  return hex;
+};
+
+const parseBrandingConfig = (rawConfig: any) => {
+  if (!rawConfig || typeof rawConfig !== "object") {
+    throw new Error("Active branding configuration not found");
+  }
+
+  return {
+    primaryHex: requireBrandingHex(rawConfig.primary_hex, "primary_hex"),
+    primaryLightHex: requireBrandingHex(
+      rawConfig.primary_light_hex,
+      "primary_light_hex",
+    ),
+    textHex: requireBrandingHex(rawConfig.text_hex, "text_hex"),
+    mutedHex: requireBrandingHex(rawConfig.muted_hex, "muted_hex"),
+    institutionName: requireBrandingText(
+      rawConfig.institution_name,
+      "institution_name",
+    ),
+    website: requireBrandingText(rawConfig.website, "website"),
+    phone: requireBrandingText(rawConfig.phone, "phone"),
+    location: requireBrandingText(rawConfig.location, "location"),
+    logoBase64: String(rawConfig.logo_base64 || "").trim(),
+  };
+};
+
+const resolveBrandingConfig = (rawConfig: any) => {
+  if (!rawConfig || typeof rawConfig !== "object") {
+    throw new Error("Active branding configuration not found");
+  }
+
+  const hasCamelCaseShape =
+    "primaryHex" in rawConfig &&
+    "primaryLightHex" in rawConfig &&
+    "textHex" in rawConfig &&
+    "mutedHex" in rawConfig;
+
+  if (!hasCamelCaseShape) {
+    return parseBrandingConfig(rawConfig);
+  }
+
+  return {
+    primaryHex: requireBrandingHex(rawConfig.primaryHex, "primaryHex"),
+    primaryLightHex: requireBrandingHex(
+      rawConfig.primaryLightHex,
+      "primaryLightHex",
+    ),
+    textHex: requireBrandingHex(rawConfig.textHex, "textHex"),
+    mutedHex: requireBrandingHex(rawConfig.mutedHex, "mutedHex"),
+    institutionName: requireBrandingText(
+      rawConfig.institutionName,
+      "institutionName",
+    ),
+    website: requireBrandingText(rawConfig.website, "website"),
+    phone: requireBrandingText(rawConfig.phone, "phone"),
+    location: requireBrandingText(rawConfig.location, "location"),
+    logoBase64: String(rawConfig.logoBase64 || "").trim(),
+  };
+};
+
+const getBrandingConfig = async (supabase: any) => {
+  const { data, error } = await supabase
+    .from("branding_settings")
+    .select(
+      "institution_name, website, phone, location, primary_hex, primary_light_hex, text_hex, muted_hex, logo_base64",
+    )
+    .eq("is_active", true)
+    .order("updated_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (error) {
+    if (String((error as any)?.code || "") === "42P01") {
+      throw new Error(
+        "branding_settings table is missing. Run the branding migration.",
+      );
+    }
+    throw new Error(`Failed to read branding settings: ${error.message}`);
+  }
+
+  return parseBrandingConfig(data);
+};
+
 const EMPTY_ROLE_PERMISSIONS = {
   dashboard: false,
   calendar: false,
   bookings: false,
   bookingsConfirm: false,
+  bookingsDelete: false,
   patients: false,
   practice: false,
   activity: false,
@@ -46,8 +184,101 @@ const EMPTY_ROLE_PERMISSIONS = {
 const PERMISSION_KEY_MAP: Record<string, string> = {
   "bookings.confirm": "bookingsConfirm",
   "bookings.complete": "bookingsComplete",
+  "bookings.delete": "bookingsDelete",
   "settings.availability": "manageAvailability",
   "users.manage": "manageUsers",
+};
+
+const normalizeServiceTypeValue = (value: unknown) =>
+  String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, "-");
+
+const formatServiceTypeLabel = (serviceType: string) =>
+  String(serviceType || "")
+    .split("-")
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+
+const formatPractitionerLabel = (practitionerId: string) => {
+  if (practitionerId === "not-sure") {
+    return "I'm not sure";
+  }
+
+  return String(practitionerId || "")
+    .split("-")
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+};
+
+const getSupportedServiceTypes = async (
+  supabase: ReturnType<typeof getSupabaseClient>,
+) => {
+  const { data, error } = await supabase
+    .from("supported_service_types")
+    .select("service_type, label")
+    .order("service_type", { ascending: true });
+
+  if (error) {
+    if (String((error as any)?.code || "") !== "42P01") {
+      throw error;
+    }
+
+    const { data: fallbackRows, error: fallbackError } = await supabase
+      .from("service_availability")
+      .select("service_id")
+      .order("service_id", { ascending: true });
+
+    if (fallbackError) {
+      throw fallbackError;
+    }
+
+    return (fallbackRows || [])
+      .map((row: any) => normalizeServiceTypeValue(row?.service_id))
+      .filter(Boolean)
+      .map((serviceType: string) => ({
+        service_type: serviceType,
+        label: formatServiceTypeLabel(serviceType),
+      }));
+  }
+
+  return (data || [])
+    .map((row: any) => ({
+      service_type: normalizeServiceTypeValue(row?.service_type),
+      label:
+        String(row?.label || "").trim() ||
+        formatServiceTypeLabel(normalizeServiceTypeValue(row?.service_type)),
+    }))
+    .filter((row: any) => Boolean(row.service_type));
+};
+
+const normalizeDoctorServiceTypes = async (
+  supabase: ReturnType<typeof getSupabaseClient>,
+  value: unknown,
+) => {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  const supportedServiceTypes = await getSupportedServiceTypes(supabase);
+  const supportedValues = new Set(
+    supportedServiceTypes.map((row: any) =>
+      normalizeServiceTypeValue(row?.service_type),
+    ),
+  );
+
+  const unique = new Set<string>();
+  for (const entry of value) {
+    const normalized = normalizeServiceTypeValue(entry);
+    if (supportedValues.has(normalized)) {
+      unique.add(normalized);
+    }
+  }
+
+  return Array.from(unique);
 };
 
 const normalizeRoleValue = (role: string | null | undefined) => {
@@ -69,6 +300,7 @@ const sanitizeRolePermissions = (value: unknown) => {
     calendar: source.calendar === true,
     bookings: source.bookings === true,
     bookingsConfirm: source.bookingsConfirm === true,
+    bookingsDelete: source.bookingsDelete === true,
     patients: source.patients === true,
     practice: source.practice === true,
     activity: source.activity === true,
@@ -78,6 +310,68 @@ const sanitizeRolePermissions = (value: unknown) => {
     manageAvailability: source.manageAvailability === true,
   };
 };
+
+const mergeUserPermissions = (
+  rolePermissions: Record<string, boolean>,
+  userOverride: unknown,
+) => {
+  const source =
+    userOverride && typeof userOverride === "object"
+      ? (userOverride as Record<string, unknown>)
+      : {};
+
+  return {
+    dashboard: rolePermissions.dashboard === true && source.dashboard !== false,
+    calendar: rolePermissions.calendar === true && source.calendar !== false,
+    bookings: rolePermissions.bookings === true && source.bookings !== false,
+    bookingsConfirm:
+      rolePermissions.bookingsConfirm === true &&
+      source.bookingsConfirm !== false,
+    bookingsDelete:
+      rolePermissions.bookingsDelete === true &&
+      source.bookingsDelete !== false,
+    patients: rolePermissions.patients === true && source.patients !== false,
+    practice: rolePermissions.practice === true && source.practice !== false,
+    activity: rolePermissions.activity === true && source.activity !== false,
+    settings: rolePermissions.settings === true && source.settings !== false,
+    bookingsComplete:
+      rolePermissions.bookingsComplete === true &&
+      source.bookingsComplete !== false,
+    manageUsers:
+      rolePermissions.manageUsers === true && source.manageUsers !== false,
+    manageAvailability:
+      rolePermissions.manageAvailability === true &&
+      source.manageAvailability !== false,
+  };
+};
+
+const buildPermissionsOverride = (
+  requestedPermissions: unknown,
+  rolePermissions: Record<string, boolean>,
+) => {
+  const source =
+    requestedPermissions && typeof requestedPermissions === "object"
+      ? (requestedPermissions as Record<string, unknown>)
+      : {};
+
+  return Object.fromEntries(
+    Object.entries(rolePermissions).filter(
+      ([permissionKey, enabled]) =>
+        enabled === true && source[permissionKey] === false,
+    ),
+  );
+};
+
+const SUPER_ADMIN_REQUIRED_PERMISSIONS = [
+  "dashboard",
+  "settings",
+  "manageUsers",
+] as const;
+
+const hasRequiredSuperAdminAccess = (permissions: Record<string, boolean>) =>
+  SUPER_ADMIN_REQUIRED_PERMISSIONS.every(
+    (permissionKey) => permissions[permissionKey] === true,
+  );
 
 const getRoleDefinition = async (
   supabase: ReturnType<typeof getSupabaseClient>,
@@ -206,6 +500,85 @@ const pickDoctorForBooking = async (
   );
 };
 
+const getEligibleDoctorsForServiceAndSlot = async (
+  supabase: ReturnType<typeof getSupabaseClient>,
+  {
+    serviceType,
+    bookingDatePart,
+    bookingTime,
+  }: {
+    serviceType: string;
+    bookingDatePart: string;
+    bookingTime: string;
+  },
+) => {
+  const { data: doctors, error: doctorsError } = await supabase
+    .from("admin_users")
+    .select("id, username")
+    .eq("role", "doctor")
+    .eq("is_available", true)
+    .order("username", { ascending: true });
+
+  if (doctorsError) {
+    throw doctorsError;
+  }
+
+  const activeDoctors = (doctors || []).filter((doctor: any) =>
+    Number.isInteger(Number(doctor?.id)),
+  );
+
+  if (!activeDoctors.length) {
+    return [];
+  }
+
+  const doctorIdList = activeDoctors.map((doctor: any) => Number(doctor.id));
+  let serviceScopedDoctorIds = new Set<number>(doctorIdList);
+
+  const { data: doctorServiceRows, error: doctorServiceError } = await supabase
+    .from("doctor_service_assignments")
+    .select("doctor_id")
+    .eq("service_type", serviceType)
+    .in("doctor_id", doctorIdList);
+
+  if (doctorServiceError) {
+    // If migration has not been applied yet, keep backward compatibility.
+    if (String((doctorServiceError as any)?.code || "") !== "42P01") {
+      throw doctorServiceError;
+    }
+  } else {
+    serviceScopedDoctorIds = new Set(
+      (doctorServiceRows || [])
+        .map((row: any) => Number(row.doctor_id))
+        .filter((id: number) => Number.isInteger(id)),
+    );
+  }
+
+  const { data: conflicts, error: conflictsError } = await supabase
+    .from("bookings")
+    .select("assigned_doctor_id")
+    .gte("date", `${bookingDatePart}T00:00:00`)
+    .lt("date", `${bookingDatePart}T23:59:59`)
+    .eq("time", bookingTime)
+    .in("status", ["confirmed", "completed"])
+    .not("assigned_doctor_id", "is", null);
+
+  if (conflictsError) {
+    throw conflictsError;
+  }
+
+  const busyDoctorIds = new Set(
+    (conflicts || [])
+      .map((row: any) => Number(row.assigned_doctor_id))
+      .filter((id: number) => Number.isInteger(id)),
+  );
+
+  return activeDoctors.filter(
+    (doctor: any) =>
+      serviceScopedDoctorIds.has(Number(doctor.id)) &&
+      !busyDoctorIds.has(Number(doctor.id)),
+  );
+};
+
 const getAppointmentDateTime = (
   bookingDateValue: string,
   bookingTimeValue: string,
@@ -320,12 +693,16 @@ const requireAuth = async (c: any, next: any) => {
     }
 
     const roleDefinition = await getRoleDefinition(supabase, data.role);
+    const effectivePermissions = mergeUserPermissions(
+      roleDefinition.permissions,
+      data.permissions_override,
+    );
 
     c.set("user", {
       ...data,
       role: roleDefinition.role,
       roleLabel: roleDefinition.roleLabel,
-      permissions: roleDefinition.permissions,
+      permissions: effectivePermissions,
     });
     await next();
   } catch (e) {
@@ -348,6 +725,21 @@ const requirePermission = (permission: string) => {
 
     await next();
   };
+};
+
+const requireSuperAdmin = async (c: any, next: any) => {
+  const user = c.get("user");
+  if (normalizeRoleValue(user?.role) !== "super_admin") {
+    return c.json(
+      {
+        error: "Forbidden",
+        detail: "Only Super Admin can access this resource",
+      },
+      403,
+    );
+  }
+
+  await next();
 };
 
 const DEFAULT_AVAILABILITY_CONFIG = {
@@ -514,6 +906,420 @@ const normalizeTextValue = (value: string) =>
     .trim()
     .toLowerCase();
 
+const sanitizeFileNamePart = (value: string, fallback = "file") => {
+  const cleaned = String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, "-")
+    .replace(/[^a-z0-9-]/g, "")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "")
+    .slice(0, 40);
+
+  return cleaned || fallback;
+};
+
+const toPdfValue = (value: unknown) => {
+  if (value === null || value === undefined) {
+    return "N/A";
+  }
+
+  if (Array.isArray(value)) {
+    return value.length > 0 ? JSON.stringify(value) : "N/A";
+  }
+
+  const text = String(value).trim();
+  return text || "N/A";
+};
+
+const hexToRgb = (hex: string) => {
+  const normalized = String(hex || "")
+    .replace("#", "")
+    .trim();
+
+  if (normalized.length !== 6) {
+    return rgb(0, 0, 0);
+  }
+
+  const red = parseInt(normalized.slice(0, 2), 16) / 255;
+  const green = parseInt(normalized.slice(2, 4), 16) / 255;
+  const blue = parseInt(normalized.slice(4, 6), 16) / 255;
+  return rgb(red, green, blue);
+};
+
+const decodeBase64ToBytes = (base64Value: string) => {
+  const decoded = atob(base64Value);
+  return Uint8Array.from(decoded, (character) => character.charCodeAt(0));
+};
+
+const wrapTextByWidth = (
+  text: string,
+  font: any,
+  fontSize: number,
+  maxWidth: number,
+) => {
+  const raw = String(text || "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!raw) {
+    return [""];
+  }
+
+  const words = raw.split(" ");
+  const lines: string[] = [];
+  let currentLine = "";
+
+  for (const word of words) {
+    const candidateLine = currentLine ? `${currentLine} ${word}` : word;
+    const candidateWidth = font.widthOfTextAtSize(candidateLine, fontSize);
+
+    if (candidateWidth <= maxWidth) {
+      currentLine = candidateLine;
+      continue;
+    }
+
+    if (currentLine) {
+      lines.push(currentLine);
+      currentLine = word;
+    } else {
+      lines.push(word);
+      currentLine = "";
+    }
+  }
+
+  if (currentLine) {
+    lines.push(currentLine);
+  }
+
+  return lines.length > 0 ? lines : [raw];
+};
+
+const generateMedicalIntakePdf = async (
+  formData: any,
+  booking: any,
+  brandingConfig: any,
+) => {
+  const pdfDoc = await PDFDocument.create();
+  const regularFont = await pdfDoc.embedFont(StandardFonts.Helvetica);
+  const boldFont = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+  const branding = resolveBrandingConfig(brandingConfig);
+
+  const BRAND_PRIMARY = hexToRgb(branding.primaryHex);
+  const BRAND_PRIMARY_LIGHT = hexToRgb(branding.primaryLightHex);
+  const BRAND_TEXT = hexToRgb(branding.textHex);
+  const BRAND_MUTED = hexToRgb(branding.mutedHex);
+
+  let logoImage: any = null;
+  try {
+    const logoBytes = decodeBase64ToBytes(branding.logoBase64);
+    logoImage = await pdfDoc.embedPng(logoBytes);
+  } catch (_logoError) {
+    logoImage = null;
+  }
+
+  const PAGE_WIDTH = 595.28;
+  const PAGE_HEIGHT = 841.89;
+  const MARGIN_X = 40;
+  const CONTENT_WIDTH = PAGE_WIDTH - MARGIN_X * 2;
+  const HEADER_HEIGHT = 112;
+  const FOOTER_HEIGHT = 36;
+  const SECTION_PADDING_X = 14;
+  const SECTION_PADDING_Y = 10;
+  const ROW_LINE_HEIGHT = 13;
+
+  const generatedAt = new Date();
+  const generatedAtLabel = generatedAt.toLocaleString("en-GB", {
+    year: "numeric",
+    month: "short",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+
+  const fullName =
+    `${formData?.patient_first_name || booking?.first_name || ""} ${formData?.patient_surname || booking?.last_name || ""}`.trim() ||
+    "Unknown Patient";
+
+  let page = pdfDoc.addPage([PAGE_WIDTH, PAGE_HEIGHT]);
+  let y = PAGE_HEIGHT - HEADER_HEIGHT - 22;
+
+  const drawHeader = (targetPage: any, continuation = false) => {
+    targetPage.drawRectangle({
+      x: 0,
+      y: PAGE_HEIGHT - HEADER_HEIGHT,
+      width: PAGE_WIDTH,
+      height: HEADER_HEIGHT,
+      color: BRAND_PRIMARY,
+    });
+
+    if (logoImage) {
+      const logoScale = Math.min(130 / logoImage.width, 48 / logoImage.height);
+      const logoWidth = logoImage.width * logoScale;
+      const logoHeight = logoImage.height * logoScale;
+      const logoX = MARGIN_X;
+      const logoY = PAGE_HEIGHT - 18 - logoHeight;
+
+      targetPage.drawRectangle({
+        x: logoX - 6,
+        y: logoY - 5,
+        width: logoWidth + 12,
+        height: logoHeight + 10,
+        color: rgb(1, 1, 1),
+      });
+
+      targetPage.drawImage(logoImage, {
+        x: logoX,
+        y: logoY,
+        width: logoWidth,
+        height: logoHeight,
+      });
+    }
+
+    targetPage.drawText(branding.institutionName, {
+      x: MARGIN_X + 150,
+      y: PAGE_HEIGHT - 42,
+      size: 19,
+      font: boldFont,
+      color: rgb(1, 1, 1),
+    });
+
+    targetPage.drawText(
+      continuation ? "Medical Intake Form (Continued)" : "Medical Intake Form",
+      {
+        x: MARGIN_X + 150,
+        y: PAGE_HEIGHT - 63,
+        size: 12,
+        font: regularFont,
+        color: rgb(1, 1, 1),
+      },
+    );
+
+    targetPage.drawText(`${branding.website} | ${branding.phone}`, {
+      x: MARGIN_X + 150,
+      y: PAGE_HEIGHT - 79,
+      size: 9,
+      font: regularFont,
+      color: rgb(1, 1, 1),
+    });
+
+    targetPage.drawRectangle({
+      x: MARGIN_X,
+      y: PAGE_HEIGHT - HEADER_HEIGHT - 8,
+      width: CONTENT_WIDTH,
+      height: 26,
+      color: BRAND_PRIMARY_LIGHT,
+    });
+
+    targetPage.drawText(`Patient: ${fullName}`, {
+      x: MARGIN_X + 10,
+      y: PAGE_HEIGHT - HEADER_HEIGHT + 1,
+      size: 9,
+      font: boldFont,
+      color: BRAND_TEXT,
+    });
+
+    targetPage.drawText(`Generated: ${generatedAtLabel}`, {
+      x: MARGIN_X + CONTENT_WIDTH - 170,
+      y: PAGE_HEIGHT - HEADER_HEIGHT + 1,
+      size: 9,
+      font: regularFont,
+      color: BRAND_TEXT,
+    });
+  };
+
+  const addPage = () => {
+    page = pdfDoc.addPage([PAGE_WIDTH, PAGE_HEIGHT]);
+    drawHeader(page, true);
+    y = PAGE_HEIGHT - HEADER_HEIGHT - 22;
+  };
+
+  const getRowHeight = (label: string, value: unknown) => {
+    const lineCount = wrapTextByWidth(
+      `${toPdfValue(value)}`,
+      regularFont,
+      10,
+      CONTENT_WIDTH - SECTION_PADDING_X * 2 - 130,
+    ).length;
+    return Math.max(1, lineCount) * ROW_LINE_HEIGHT + 2;
+  };
+
+  const drawSection = (
+    title: string,
+    rows: Array<{ label: string; value: unknown }>,
+  ) => {
+    const rowsHeight = rows.reduce(
+      (sum, row) => sum + getRowHeight(row.label, row.value),
+      0,
+    );
+    const sectionHeight =
+      SECTION_PADDING_Y * 2 +
+      18 +
+      rowsHeight +
+      Math.max(0, rows.length - 1) * 3;
+
+    if (y - sectionHeight < FOOTER_HEIGHT + 14) {
+      addPage();
+    }
+
+    const sectionY = y - sectionHeight;
+    page.drawRectangle({
+      x: MARGIN_X,
+      y: sectionY,
+      width: CONTENT_WIDTH,
+      height: sectionHeight,
+      color: rgb(0.99, 0.99, 0.99),
+      borderColor: BRAND_PRIMARY_LIGHT,
+      borderWidth: 1,
+    });
+
+    page.drawText(title, {
+      x: MARGIN_X + SECTION_PADDING_X,
+      y: y - SECTION_PADDING_Y - 4,
+      size: 11,
+      font: boldFont,
+      color: BRAND_PRIMARY,
+    });
+
+    let rowY = y - SECTION_PADDING_Y - 20;
+    rows.forEach((row) => {
+      const valueLines = wrapTextByWidth(
+        `${toPdfValue(row.value)}`,
+        regularFont,
+        10,
+        CONTENT_WIDTH - SECTION_PADDING_X * 2 - 130,
+      );
+
+      page.drawText(`${row.label}:`, {
+        x: MARGIN_X + SECTION_PADDING_X,
+        y: rowY,
+        size: 9,
+        font: boldFont,
+        color: BRAND_TEXT,
+      });
+
+      valueLines.forEach((line, index) => {
+        page.drawText(line, {
+          x: MARGIN_X + SECTION_PADDING_X + 130,
+          y: rowY - index * ROW_LINE_HEIGHT,
+          size: 10,
+          font: regularFont,
+          color: BRAND_TEXT,
+        });
+      });
+
+      rowY -= Math.max(1, valueLines.length) * ROW_LINE_HEIGHT + 3;
+    });
+
+    y = sectionY - 12;
+  };
+
+  const familyDetails = Array.isArray(formData?.family_details)
+    ? formData.family_details
+    : [];
+  const formattedFamilyDetails =
+    familyDetails.length === 0
+      ? "No family details provided"
+      : familyDetails
+          .map(
+            (detail: any, index: number) =>
+              `${index + 1}. ${toPdfValue(detail?.name)} | ${toPdfValue(detail?.relationship)} | Age: ${toPdfValue(detail?.age)} | ${toPdfValue(detail?.health_status)}`,
+          )
+          .join("\n");
+
+  drawHeader(page);
+
+  drawSection("Patient Details", [
+    {
+      label: "Full Name",
+      value:
+        `${formData?.patient_first_name || booking?.first_name || ""} ${formData?.patient_surname || booking?.last_name || ""}`.trim(),
+    },
+    {
+      label: "ID Number",
+      value: formData?.patient_id_number || booking?.id_number,
+    },
+    { label: "Date of Birth", value: formData?.patient_date_of_birth },
+    { label: "Phone", value: formData?.patient_cell || booking?.phone },
+    { label: "Email", value: formData?.patient_email || booking?.email },
+    { label: "Address", value: formData?.patient_address },
+  ]);
+
+  drawSection("Responsible Person", [
+    {
+      label: "Name",
+      value:
+        `${formData?.responsible_first_name || ""} ${formData?.responsible_surname || ""}`.trim(),
+    },
+    { label: "Relationship", value: formData?.responsible_relationship },
+    { label: "Phone", value: formData?.responsible_cell },
+  ]);
+
+  drawSection("Medical Aid", [
+    {
+      label: "Medical Aid Name",
+      value: formData?.medical_aid_name || booking?.medical_aid,
+    },
+    {
+      label: "Medical Aid Number",
+      value: formData?.medical_aid_number || booking?.medical_aid_number,
+    },
+    { label: "Account Number", value: formData?.account_number },
+  ]);
+
+  drawSection("Emergency Contact", [
+    { label: "Name", value: formData?.nearest_name },
+    { label: "Relationship", value: formData?.nearest_relationship },
+    { label: "Phone", value: formData?.nearest_cell },
+    { label: "Address", value: formData?.nearest_address },
+  ]);
+
+  drawSection("Referral and Family Details", [
+    { label: "Referred By", value: formData?.referred_by_name },
+    { label: "Family Details", value: formattedFamilyDetails },
+  ]);
+
+  drawSection("Signatures and Consent", [
+    { label: "Patient Signature", value: formData?.patient_signature },
+    { label: "Witness Signature", value: formData?.witness_signature },
+    { label: "Date Signed", value: formData?.signature_date },
+    {
+      label: "Booking Reference",
+      value: booking?.id || formData?.booking_id,
+    },
+  ]);
+
+  const allPages = pdfDoc.getPages();
+  allPages.forEach((targetPage, index) => {
+    targetPage.drawLine({
+      start: { x: MARGIN_X, y: FOOTER_HEIGHT },
+      end: { x: PAGE_WIDTH - MARGIN_X, y: FOOTER_HEIGHT },
+      thickness: 0.8,
+      color: BRAND_PRIMARY_LIGHT,
+    });
+
+    targetPage.drawText(branding.location, {
+      x: MARGIN_X,
+      y: 24,
+      size: 8,
+      font: regularFont,
+      color: BRAND_MUTED,
+    });
+
+    targetPage.drawText(
+      `Medical Intake PDF | ${branding.website} | Page ${index + 1}/${allPages.length}`,
+      {
+        x: MARGIN_X,
+        y: 12,
+        size: 8,
+        font: regularFont,
+        color: BRAND_MUTED,
+      },
+    );
+  });
+
+  return await pdfDoc.save();
+};
+
 const ensurePatientExistsForBooking = async (supabase: any, booking: any) => {
   const bookingIdNumber = String(booking.id_number || "").trim();
   const bookingPhone = normalizePhoneValue(booking.phone || "");
@@ -631,23 +1437,39 @@ const isSameClientBooking = (candidate: any, incoming: any) => {
 const normalizeAvailabilityConfig = (config: any) => {
   const normalized = JSON.parse(JSON.stringify(DEFAULT_AVAILABILITY_CONFIG));
 
-  if (!config?.services) {
-    return normalized;
-  }
+  if (config?.services && typeof config.services === "object") {
+    for (const [serviceId, incomingServiceRaw] of Object.entries(
+      config.services,
+    )) {
+      const incomingService =
+        incomingServiceRaw && typeof incomingServiceRaw === "object"
+          ? (incomingServiceRaw as Record<string, any>)
+          : {};
 
-  for (const [serviceId, serviceConfig] of Object.entries(
-    normalized.services,
-  )) {
-    const incomingService = config.services?.[serviceId];
+      if (!normalized.services[serviceId]) {
+        normalized.services[serviceId] = {
+          enabled: true,
+          practitioners: {},
+        };
+      }
 
-    if (typeof incomingService?.enabled === "boolean") {
-      serviceConfig.enabled = incomingService.enabled;
-    }
+      if (typeof incomingService.enabled === "boolean") {
+        normalized.services[serviceId].enabled = incomingService.enabled;
+      }
 
-    for (const practitionerId of Object.keys(serviceConfig.practitioners)) {
-      const enabled = incomingService?.practitioners?.[practitionerId];
-      if (typeof enabled === "boolean") {
-        serviceConfig.practitioners[practitionerId] = enabled;
+      const incomingPractitioners =
+        incomingService.practitioners &&
+        typeof incomingService.practitioners === "object"
+          ? incomingService.practitioners
+          : {};
+
+      for (const [practitionerId, practitionerEnabled] of Object.entries(
+        incomingPractitioners,
+      )) {
+        if (typeof practitionerEnabled === "boolean") {
+          normalized.services[serviceId].practitioners[practitionerId] =
+            practitionerEnabled;
+        }
       }
     }
   }
@@ -678,27 +1500,57 @@ const fetchAvailabilityConfigFromDb = async (supabase: any) => {
         .select("day_of_week, enabled, start_time, end_time"),
     ]);
 
-  const config = JSON.parse(JSON.stringify(DEFAULT_AVAILABILITY_CONFIG));
+  const config = {
+    services: {} as Record<
+      string,
+      { enabled: boolean; practitioners: Record<string, boolean> }
+    >,
+    operatingHours: JSON.parse(
+      JSON.stringify(DEFAULT_AVAILABILITY_CONFIG.operatingHours),
+    ),
+  };
+
+  for (const [serviceId, serviceConfig] of Object.entries(
+    DEFAULT_AVAILABILITY_CONFIG.services,
+  )) {
+    config.services[serviceId] = {
+      enabled: serviceConfig.enabled,
+      practitioners: { ...serviceConfig.practitioners },
+    };
+  }
 
   if (!servicesResult.error) {
     for (const service of servicesResult.data || []) {
-      if (config.services[service.service_id]) {
-        config.services[service.service_id].enabled = service.enabled;
+      const serviceId = normalizeServiceTypeValue(service.service_id);
+      if (!serviceId) continue;
+
+      if (!config.services[serviceId]) {
+        config.services[serviceId] = {
+          enabled: Boolean(service.enabled),
+          practitioners: {},
+        };
+      } else {
+        config.services[serviceId].enabled = Boolean(service.enabled);
       }
     }
   }
 
   if (!practitionersResult.error) {
     for (const practitioner of practitionersResult.data || []) {
-      if (
-        config.services[practitioner.service_id]?.practitioners[
-          practitioner.practitioner_id
-        ] !== undefined
-      ) {
-        config.services[practitioner.service_id].practitioners[
-          practitioner.practitioner_id
-        ] = practitioner.enabled;
+      const serviceId = normalizeServiceTypeValue(practitioner.service_id);
+      const practitionerId = String(practitioner.practitioner_id || "").trim();
+      if (!serviceId || !practitionerId) continue;
+
+      if (!config.services[serviceId]) {
+        config.services[serviceId] = {
+          enabled: true,
+          practitioners: {},
+        };
       }
+
+      config.services[serviceId].practitioners[practitionerId] = Boolean(
+        practitioner.enabled,
+      );
     }
   }
 
@@ -724,6 +1576,62 @@ const fetchAvailabilityConfigFromDb = async (supabase: any) => {
   return normalizeAvailabilityConfig(config);
 };
 
+const fetchServiceCatalogFromDb = async (supabase: any) => {
+  const [serviceTypesResult, serviceAvailabilityResult, practitionerResult] =
+    await Promise.all([
+      getSupportedServiceTypes(supabase),
+      supabase.from("service_availability").select("service_id"),
+      supabase
+        .from("practitioner_availability")
+        .select("service_id, practitioner_id"),
+    ]);
+
+  const serviceLabelById = new Map<string, string>();
+
+  for (const row of serviceTypesResult || []) {
+    const serviceId = normalizeServiceTypeValue(row?.service_type);
+    if (!serviceId) continue;
+    serviceLabelById.set(
+      serviceId,
+      String(row?.label || "").trim() || formatServiceTypeLabel(serviceId),
+    );
+  }
+
+  for (const row of serviceAvailabilityResult.data || []) {
+    const serviceId = normalizeServiceTypeValue(row?.service_id);
+    if (!serviceId || serviceLabelById.has(serviceId)) continue;
+    serviceLabelById.set(serviceId, formatServiceTypeLabel(serviceId));
+  }
+
+  const practitionerByService = new Map<string, Set<string>>();
+  for (const row of practitionerResult.data || []) {
+    const serviceId = normalizeServiceTypeValue(row?.service_id);
+    const practitionerId = String(row?.practitioner_id || "").trim();
+    if (!serviceId || !practitionerId) continue;
+
+    if (!practitionerByService.has(serviceId)) {
+      practitionerByService.set(serviceId, new Set<string>());
+    }
+
+    practitionerByService.get(serviceId)?.add(practitionerId);
+  }
+
+  const serviceCatalog = Array.from(serviceLabelById.entries())
+    .map(([serviceId, serviceLabel]) => ({
+      id: serviceId,
+      title: serviceLabel,
+      practitioners: Array.from(practitionerByService.get(serviceId) || [])
+        .sort((a, b) => a.localeCompare(b))
+        .map((practitionerId) => ({
+          id: practitionerId,
+          title: formatPractitionerLabel(practitionerId),
+        })),
+    }))
+    .sort((a, b) => a.title.localeCompare(b.title));
+
+  return serviceCatalog;
+};
+
 // Health check endpoint
 app.get("/make-server-34100c2d/health", (c) => {
   return c.json({ status: "ok" });
@@ -741,6 +1649,105 @@ app.get("/make-server-34100c2d/availability", async (c) => {
     return c.json({ success: true, config: DEFAULT_AVAILABILITY_CONFIG });
   }
 });
+
+app.get("/make-server-34100c2d/service-types", async (c) => {
+  try {
+    const supabase = getSupabaseClient();
+    const serviceTypes = await getSupportedServiceTypes(supabase);
+    return c.json({ success: true, serviceTypes });
+  } catch (error) {
+    console.error("Service type fetch exception:", error);
+    return c.json({ error: "Failed to fetch service types" }, 500);
+  }
+});
+
+app.get("/make-server-34100c2d/service-catalog", async (c) => {
+  try {
+    const supabase = getSupabaseClient();
+    const serviceCatalog = await fetchServiceCatalogFromDb(supabase);
+    return c.json({ success: true, services: serviceCatalog });
+  } catch (error) {
+    console.error("Service catalog fetch exception:", error);
+    return c.json({ error: "Failed to fetch service catalog" }, 500);
+  }
+});
+
+app.post(
+  "/make-server-34100c2d/service-types",
+  requireAuth,
+  requireSuperAdmin,
+  async (c) => {
+    try {
+      const { serviceType, label } = await c.req.json();
+      const normalizedServiceType = normalizeServiceTypeValue(serviceType);
+      const normalizedLabel =
+        String(label || "").trim() ||
+        formatServiceTypeLabel(normalizedServiceType);
+
+      if (!normalizedServiceType) {
+        return c.json({ error: "serviceType is required" }, 400);
+      }
+
+      const supabase = getSupabaseClient();
+      const { error: insertError } = await supabase
+        .from("supported_service_types")
+        .upsert(
+          {
+            service_type: normalizedServiceType,
+            label: normalizedLabel,
+            updated_at: new Date().toISOString(),
+          },
+          { onConflict: "service_type" },
+        );
+
+      if (insertError) {
+        throw insertError;
+      }
+
+      const { error: availabilityError } = await supabase
+        .from("service_availability")
+        .upsert(
+          {
+            service_id: normalizedServiceType,
+            enabled: true,
+            updated_at: new Date().toISOString(),
+          },
+          { onConflict: "service_id" },
+        );
+
+      if (availabilityError) {
+        throw availabilityError;
+      }
+
+      const { error: practitionerError } = await supabase
+        .from("practitioner_availability")
+        .upsert(
+          {
+            service_id: normalizedServiceType,
+            practitioner_id: "not-sure",
+            enabled: true,
+            updated_at: new Date().toISOString(),
+          },
+          { onConflict: "service_id,practitioner_id" },
+        );
+
+      if (practitionerError) {
+        throw practitionerError;
+      }
+
+      return c.json({
+        success: true,
+        serviceType: {
+          service_type: normalizedServiceType,
+          label: normalizedLabel,
+        },
+      });
+    } catch (error) {
+      console.error("Service type create error:", error);
+      return c.json({ error: "Failed to create service type" }, 500);
+    }
+  },
+);
 
 app.put(
   "/make-server-34100c2d/availability",
@@ -904,7 +1911,10 @@ app.post("/make-server-34100c2d/auth/login", async (c) => {
         username: data.username,
         role: roleDefinition.role,
         roleLabel: roleDefinition.roleLabel,
-        permissions: roleDefinition.permissions,
+        permissions: mergeUserPermissions(
+          roleDefinition.permissions,
+          data.permissions_override,
+        ),
       },
       token: btoa(`${username}:${password}`),
     });
@@ -1106,16 +2116,77 @@ app.post("/make-server-34100c2d/bookings", async (c) => {
 
     let assignedDoctorId: number | null = null;
     let assignedDoctorUsername: string | null = null;
+    const requestedDoctorIdRaw =
+      bookingData.assignedDoctorId || bookingData.assigned_doctor_id;
+    const requestedDoctorId = requestedDoctorIdRaw
+      ? Number(requestedDoctorIdRaw)
+      : null;
 
-    if (bookingData.assignedDoctorId || bookingData.assigned_doctor_id) {
-      const requestedDoctorId = Number(
-        bookingData.assignedDoctorId || bookingData.assigned_doctor_id,
+    if (
+      requestedDoctorId !== null &&
+      (!Number.isInteger(requestedDoctorId) || requestedDoctorId <= 0)
+    ) {
+      return c.json({ error: "Invalid doctor selected" }, 400);
+    }
+
+    if (shouldConfirmImmediately) {
+      const eligibleDoctors = await getEligibleDoctorsForServiceAndSlot(
+        supabase,
+        {
+          serviceType: String(bookingData.serviceType || ""),
+          bookingDatePart,
+          bookingTime,
+        },
       );
 
-      if (!Number.isInteger(requestedDoctorId) || requestedDoctorId <= 0) {
-        return c.json({ error: "Invalid doctor selected" }, 400);
+      if (!eligibleDoctors.length) {
+        return c.json(
+          {
+            error: "No available doctor found for this service and slot.",
+            code: "NO_ELIGIBLE_DOCTOR_FOR_SERVICE",
+          },
+          409,
+        );
       }
 
+      if (requestedDoctorId !== null) {
+        const selectedDoctor = eligibleDoctors.find(
+          (doctor: any) => Number(doctor.id) === requestedDoctorId,
+        );
+
+        if (!selectedDoctor) {
+          return c.json(
+            {
+              error:
+                "The selected doctor is not available for this service and slot.",
+              code: "DOCTOR_NOT_ELIGIBLE_FOR_SERVICE_SLOT",
+            },
+            409,
+          );
+        }
+
+        assignedDoctorId = Number(selectedDoctor.id);
+        assignedDoctorUsername = String(selectedDoctor.username || "Doctor");
+      } else if (eligibleDoctors.length === 1) {
+        assignedDoctorId = Number(eligibleDoctors[0].id);
+        assignedDoctorUsername = String(
+          eligibleDoctors[0].username || "Doctor",
+        );
+      } else {
+        return c.json(
+          {
+            error:
+              "Multiple doctors are available for this service. Please select one.",
+            code: "MULTIPLE_DOCTORS_ASSIGN_REQUIRED",
+            availableDoctors: eligibleDoctors.map((doctor: any) => ({
+              id: Number(doctor.id),
+              username: String(doctor.username || "Doctor"),
+            })),
+          },
+          409,
+        );
+      }
+    } else if (requestedDoctorId !== null) {
       const { data: doctor, error: doctorError } = await supabase
         .from("admin_users")
         .select("id, username, role")
@@ -1130,8 +2201,8 @@ app.post("/make-server-34100c2d/bookings", async (c) => {
         return c.json({ error: "Doctor not found" }, 404);
       }
 
-      assignedDoctorId = doctor.id;
-      assignedDoctorUsername = doctor.username;
+      assignedDoctorId = Number(doctor.id);
+      assignedDoctorUsername = String(doctor.username || "Doctor");
     }
 
     // Insert booking
@@ -1448,6 +2519,72 @@ app.post("/make-server-34100c2d/medical-intake", async (c) => {
       throw insertError;
     }
 
+    const submissionDate = new Date();
+    const year = String(submissionDate.getFullYear());
+    const month = String(submissionDate.getMonth() + 1).padStart(2, "0");
+    const patientNameSlug = sanitizeFileNamePart(
+      `${firstName}-${lastName}`,
+      "patient",
+    );
+    const fileName = `medical-intake-${patientNameSlug}-${submissionDate
+      .toISOString()
+      .slice(0, 10)}.pdf`;
+    const filePath = `${patientId}/consent-forms/${year}/${month}/${Date.now()}-${fileName}`;
+
+    const brandingConfig = await getBrandingConfig(supabase);
+    const pdfBytes = await generateMedicalIntakePdf(
+      formData,
+      booking,
+      brandingConfig,
+    );
+
+    const { error: uploadError } = await supabase.storage
+      .from("patient-files")
+      .upload(filePath, pdfBytes, {
+        contentType: "application/pdf",
+        upsert: false,
+      });
+
+    if (uploadError) {
+      throw uploadError;
+    }
+
+    const { error: documentError } = await supabase
+      .from("patient_documents")
+      .insert({
+        patient_id: patientId,
+        category: "consent-form",
+        title: "Medical Intake Form",
+        file_name: fileName,
+        file_path: filePath,
+        mime_type: "application/pdf",
+        size_bytes: Number(pdfBytes.length || 0),
+        uploaded_by: "Patient Portal",
+      });
+
+    if (documentError) {
+      throw documentError;
+    }
+
+    const { error: submissionRecordError } = await supabase
+      .from("medical_form_submissions")
+      .insert({
+        patient_id: patientId,
+        booking_id: bookingId,
+        medical_intake_id: medicalIntake.id,
+        storage_bucket: "patient-files",
+        file_name: fileName,
+        file_path: filePath,
+        form_payload: formData,
+      });
+
+    if (
+      submissionRecordError &&
+      String((submissionRecordError as any)?.code || "") !== "42P01"
+    ) {
+      throw submissionRecordError;
+    }
+
     // Log activity
     await supabase.from("activity_log").insert({
       type: "medical_intake_submitted",
@@ -1458,7 +2595,15 @@ app.post("/make-server-34100c2d/medical-intake", async (c) => {
       patient_id: patientId,
     });
 
-    return c.json({ success: true, medicalIntake });
+    return c.json({
+      success: true,
+      medicalIntake,
+      intakeDocument: {
+        fileName,
+        filePath,
+        bucket: "patient-files",
+      },
+    });
   } catch (error) {
     console.error("Medical intake error:", error);
     return c.json(
@@ -1762,81 +2907,95 @@ app.put("/make-server-34100c2d/bookings/:id", requireAuth, async (c) => {
 });
 
 // Delete booking
-app.delete("/make-server-34100c2d/bookings/:id", requireAuth, async (c) => {
-  try {
-    const bookingId = c.req.param("id");
+app.delete(
+  "/make-server-34100c2d/bookings/:id",
+  requireAuth,
+  requirePermission("bookings.delete"),
+  async (c) => {
+    try {
+      const bookingId = c.req.param("id");
 
-    const supabase = getSupabaseClient();
-    const user = c.get("user");
+      const supabase = getSupabaseClient();
+      const user = c.get("user");
 
-    // Get booking details before deleting
-    const { data: booking } = await supabase
-      .from("bookings")
-      .select("*")
-      .eq("id", bookingId)
-      .single();
+      // Get booking details before deleting
+      const { data: booking } = await supabase
+        .from("bookings")
+        .select("*")
+        .eq("id", bookingId)
+        .single();
 
-    if (!booking) {
-      return c.json({ error: "Booking not found" }, 404);
+      if (!booking) {
+        return c.json({ error: "Booking not found" }, 404);
+      }
+
+      // Delete booking
+      const { error } = await supabase
+        .from("bookings")
+        .delete()
+        .eq("id", bookingId);
+
+      if (error) {
+        throw error;
+      }
+
+      // Log activity
+      await supabase.from("activity_log").insert({
+        type: "booking_deleted",
+        user_name: user?.username || "Admin",
+        user_role: normalizeRoleValue(user?.role),
+        description: `Booking deleted for ${booking.first_name} ${booking.last_name}`,
+        booking_id: bookingId,
+      });
+
+      return c.json({ success: true });
+    } catch (error) {
+      console.error("Delete booking error:", error);
+      return c.json(
+        { error: "Failed to delete booking: " + error.message },
+        500,
+      );
     }
-
-    // Delete booking
-    const { error } = await supabase
-      .from("bookings")
-      .delete()
-      .eq("id", bookingId);
-
-    if (error) {
-      throw error;
-    }
-
-    // Log activity
-    await supabase.from("activity_log").insert({
-      type: "booking_deleted",
-      user_name: user?.username || "Admin",
-      user_role: normalizeRoleValue(user?.role),
-      description: `Booking deleted for ${booking.first_name} ${booking.last_name}`,
-      booking_id: bookingId,
-    });
-
-    return c.json({ success: true });
-  } catch (error) {
-    console.error("Delete booking error:", error);
-    return c.json({ error: "Failed to delete booking: " + error.message }, 500);
-  }
-});
+  },
+);
 
 // User management
-app.get("/make-server-34100c2d/roles", requireAuth, async (c) => {
-  try {
-    const supabase = getSupabaseClient();
-    const { data, error } = await supabase
-      .from("role_definitions")
-      .select("role, label, permissions")
-      .order("label", { ascending: true });
+app.get(
+  "/make-server-34100c2d/roles",
+  requireAuth,
+  requireSuperAdmin,
+  async (c) => {
+    try {
+      const supabase = getSupabaseClient();
+      const { data, error } = await supabase
+        .from("role_definitions")
+        .select("role, label, permissions")
+        .order("label", { ascending: true });
 
-    if (error) {
-      throw error;
+      if (error) {
+        throw error;
+      }
+
+      return c.json({
+        success: true,
+        roles: (data || []).map((roleDefinition) => ({
+          role: roleDefinition.role,
+          label: roleDefinition.label || roleDefinition.role,
+          permissions: sanitizeRolePermissions(roleDefinition.permissions),
+        })),
+      });
+    } catch (error) {
+      console.error("Get roles error:", error);
+      return c.json({ error: "Failed to fetch roles: " + error.message }, 500);
     }
-
-    return c.json({
-      success: true,
-      roles: (data || []).map((roleDefinition) => ({
-        role: roleDefinition.role,
-        label: roleDefinition.label || roleDefinition.role,
-        permissions: sanitizeRolePermissions(roleDefinition.permissions),
-      })),
-    });
-  } catch (error) {
-    console.error("Get roles error:", error);
-    return c.json({ error: "Failed to fetch roles: " + error.message }, 500);
-  }
-});
+  },
+);
 
 app.get("/make-server-34100c2d/available-doctors", requireAuth, async (c) => {
   try {
     const date = c.req.query("date") || "";
     const time = c.req.query("time") || "";
+    const serviceType = String(c.req.query("serviceType") || "").trim();
 
     if (!date || !time) {
       return c.json({ error: "date and time query params required" }, 400);
@@ -1844,6 +3003,25 @@ app.get("/make-server-34100c2d/available-doctors", requireAuth, async (c) => {
 
     const supabase = getSupabaseClient();
     const bookingDatePart = getDatePartFromIso(date);
+
+    if (serviceType) {
+      const eligibleDoctors = await getEligibleDoctorsForServiceAndSlot(
+        supabase,
+        {
+          serviceType,
+          bookingDatePart,
+          bookingTime: time,
+        },
+      );
+
+      return c.json({
+        success: true,
+        doctors: eligibleDoctors.map((doctor: any) => ({
+          id: Number(doctor.id),
+          username: String(doctor.username || "Doctor"),
+        })),
+      });
+    }
 
     const { data: doctors, error: doctorsError } = await supabase
       .from("admin_users")
@@ -1872,6 +3050,49 @@ app.get("/make-server-34100c2d/available-doctors", requireAuth, async (c) => {
   } catch (error) {
     console.error("Available doctors error:", error);
     return c.json({ error: "Failed to fetch available doctors" }, 500);
+  }
+});
+
+app.get("/make-server-34100c2d/eligible-doctors", async (c) => {
+  try {
+    const date = String(c.req.query("date") || "").trim();
+    const time = String(c.req.query("time") || "").trim();
+    const serviceType = String(c.req.query("serviceType") || "").trim();
+
+    if (!date || !time || !serviceType) {
+      return c.json(
+        { error: "date, time, and serviceType query params are required" },
+        400,
+      );
+    }
+
+    const bookingDatePart = getDatePartFromIso(date);
+    const bookingTime = normalizeTimeValue(time, "");
+
+    if (!bookingDatePart || !bookingTime) {
+      return c.json({ error: "Invalid date or time" }, 400);
+    }
+
+    const supabase = getSupabaseClient();
+    const eligibleDoctors = await getEligibleDoctorsForServiceAndSlot(
+      supabase,
+      {
+        serviceType,
+        bookingDatePart,
+        bookingTime,
+      },
+    );
+
+    return c.json({
+      success: true,
+      doctors: eligibleDoctors.map((doctor: any) => ({
+        id: Number(doctor.id),
+        username: String(doctor.username || "Doctor"),
+      })),
+    });
+  } catch (error) {
+    console.error("Eligible doctors error:", error);
+    return c.json({ error: "Failed to fetch eligible doctors" }, 500);
   }
 });
 
@@ -1905,7 +3126,48 @@ app.get("/make-server-34100c2d/doctors", requireAuth, async (c) => {
       throw error;
     }
 
-    return c.json({ success: true, doctors: data || [] });
+    const doctorRows = data || [];
+    const doctorIds = doctorRows
+      .map((doctor: any) => Number(doctor.id))
+      .filter((id: number) => Number.isInteger(id));
+
+    let serviceTypeByDoctorId = new Map<number, string[]>();
+
+    if (doctorIds.length > 0) {
+      const { data: serviceRows, error: serviceError } = await supabase
+        .from("doctor_service_assignments")
+        .select("doctor_id, service_type")
+        .in("doctor_id", doctorIds);
+
+      if (!serviceError) {
+        serviceTypeByDoctorId = (serviceRows || []).reduce(
+          (map: Map<number, string[]>, row: any) => {
+            const doctorId = Number(row.doctor_id);
+            const serviceType = String(row.service_type || "").trim();
+            if (!Number.isInteger(doctorId) || !serviceType) {
+              return map;
+            }
+
+            const current = map.get(doctorId) || [];
+            if (!current.includes(serviceType)) {
+              current.push(serviceType);
+              map.set(doctorId, current);
+            }
+
+            return map;
+          },
+          new Map<number, string[]>(),
+        );
+      }
+    }
+
+    return c.json({
+      success: true,
+      doctors: doctorRows.map((doctor: any) => ({
+        ...doctor,
+        serviceTypes: serviceTypeByDoctorId.get(Number(doctor.id)) || [],
+      })),
+    });
   } catch (error) {
     console.error("Get doctors error:", error);
     return c.json({ error: "Failed to fetch doctors: " + error.message }, 500);
@@ -1988,7 +3250,7 @@ app.put(
 app.get(
   "/make-server-34100c2d/users",
   requireAuth,
-  requirePermission("users.manage"),
+  requireSuperAdmin,
   async (c) => {
     try {
       const supabase = getSupabaseClient();
@@ -1998,9 +3260,11 @@ app.get(
       ] = await Promise.all([
         supabase
           .from("admin_users")
-          .select("id, username, role, created_at, last_login")
+          .select(
+            "id, username, role, created_at, last_login, permissions_override",
+          )
           .order("created_at", { ascending: false }),
-        supabase.from("role_definitions").select("role, label"),
+        supabase.from("role_definitions").select("role, label, permissions"),
       ]);
 
       if (usersError) {
@@ -2017,6 +3281,49 @@ app.get(
           roleDefinition.label || roleDefinition.role,
         ]),
       );
+      const roleDefinitionByKey = new Map(
+        (roles || []).map((roleDefinition: any) => [
+          String(roleDefinition.role || "").toLowerCase(),
+          {
+            role: String(roleDefinition.role || "").toLowerCase(),
+            label: roleDefinition.label || roleDefinition.role,
+            permissions: sanitizeRolePermissions(roleDefinition.permissions),
+          },
+        ]),
+      );
+
+      const doctorIds = (users || [])
+        .filter((record: any) => normalizeRoleValue(record.role) === "doctor")
+        .map((record: any) => Number(record.id))
+        .filter((id: number) => Number.isInteger(id));
+
+      let serviceTypeByDoctorId = new Map<number, string[]>();
+
+      if (doctorIds.length > 0) {
+        const { data: serviceRows } = await supabase
+          .from("doctor_service_assignments")
+          .select("doctor_id, service_type")
+          .in("doctor_id", doctorIds);
+
+        serviceTypeByDoctorId = (serviceRows || []).reduce(
+          (map: Map<number, string[]>, row: any) => {
+            const doctorId = Number(row.doctor_id);
+            const serviceType = String(row.service_type || "").trim();
+            if (!Number.isInteger(doctorId) || !serviceType) {
+              return map;
+            }
+
+            const current = map.get(doctorId) || [];
+            if (!current.includes(serviceType)) {
+              current.push(serviceType);
+              map.set(doctorId, current);
+            }
+
+            return map;
+          },
+          new Map<number, string[]>(),
+        );
+      }
 
       return c.json({
         success: true,
@@ -2026,6 +3333,20 @@ app.get(
             ...record,
             role: normalizedRole,
             roleLabel: roleLabelByKey.get(normalizedRole) || normalizedRole,
+            permissionsOverride:
+              record.permissions_override &&
+              typeof record.permissions_override === "object"
+                ? record.permissions_override
+                : {},
+            effectivePermissions: mergeUserPermissions(
+              roleDefinitionByKey.get(normalizedRole)?.permissions ||
+                sanitizeRolePermissions(null),
+              record.permissions_override,
+            ),
+            doctorServices:
+              normalizedRole === "doctor"
+                ? serviceTypeByDoctorId.get(Number(record.id)) || []
+                : [],
           };
         }),
       });
@@ -2039,10 +3360,10 @@ app.get(
 app.post(
   "/make-server-34100c2d/users",
   requireAuth,
-  requirePermission("users.manage"),
+  requireSuperAdmin,
   async (c) => {
     try {
-      const { username, password, role } = await c.req.json();
+      const { username, password, role, doctorServices } = await c.req.json();
       if (!username || !password) {
         return c.json({ error: "Username and password are required" }, 400);
       }
@@ -2054,19 +3375,55 @@ app.post(
       const supabase = getSupabaseClient();
       const normalizedRole = normalizeRoleValue(role);
       const roleExists = await isValidRole(supabase, normalizedRole);
+      const normalizedDoctorServices = await normalizeDoctorServiceTypes(
+        supabase,
+        doctorServices,
+      );
 
       if (!roleExists) {
         return c.json({ error: "Invalid role selected" }, 400);
       }
 
-      const { error } = await supabase.from("admin_users").insert({
-        username,
-        password_hash: password,
-        role: normalizedRole,
-      });
+      if (
+        normalizedRole === "doctor" &&
+        normalizedDoctorServices.length === 0
+      ) {
+        return c.json(
+          {
+            error:
+              "At least one service must be selected when creating a doctor account",
+          },
+          400,
+        );
+      }
+
+      const { data: createdUser, error } = await supabase
+        .from("admin_users")
+        .insert({
+          username,
+          password_hash: password,
+          role: normalizedRole,
+        })
+        .select("id")
+        .single();
 
       if (error) {
         throw error;
+      }
+
+      if (normalizedRole === "doctor" && createdUser?.id) {
+        const { error: assignError } = await supabase
+          .from("doctor_service_assignments")
+          .insert(
+            normalizedDoctorServices.map((serviceType) => ({
+              doctor_id: Number(createdUser.id),
+              service_type: serviceType,
+            })),
+          );
+
+        if (assignError) {
+          throw assignError;
+        }
       }
 
       return c.json({ success: true });
@@ -2080,7 +3437,7 @@ app.post(
 app.put(
   "/make-server-34100c2d/roles/:role",
   requireAuth,
-  requirePermission("users.manage"),
+  requireSuperAdmin,
   async (c) => {
     try {
       const roleKey = normalizeRoleValue(c.req.param("role"));
@@ -2094,6 +3451,19 @@ app.put(
       }
 
       const normalizedPermissions = sanitizeRolePermissions(permissions);
+
+      if (
+        roleKey === "super_admin" &&
+        !hasRequiredSuperAdminAccess(normalizedPermissions)
+      ) {
+        return c.json(
+          {
+            error:
+              "Super Admin role must retain Dashboard, Settings, and Manage Users access",
+          },
+          400,
+        );
+      }
 
       const { error } = await supabase
         .from("role_definitions")
@@ -2127,13 +3497,35 @@ app.put(
 app.put(
   "/make-server-34100c2d/users/:id",
   requireAuth,
-  requirePermission("users.manage"),
+  requireSuperAdmin,
   async (c) => {
     try {
       const userId = c.req.param("id");
-      const { role, password } = await c.req.json();
+      const { role, password, doctorServices, userPermissions } =
+        await c.req.json();
       const updates: any = {};
       const supabase = getSupabaseClient();
+      const actingUser = c.get("user");
+      const numericUserId = Number(userId);
+
+      const { data: existingUser, error: existingUserError } = await supabase
+        .from("admin_users")
+        .select("id, role")
+        .eq("id", numericUserId)
+        .maybeSingle();
+
+      if (existingUserError) {
+        throw existingUserError;
+      }
+
+      if (!existingUser) {
+        return c.json({ error: "User not found" }, 404);
+      }
+
+      const normalizedDoctorServices = await normalizeDoctorServiceTypes(
+        supabase,
+        doctorServices,
+      );
 
       if (role) {
         const normalizedRole = normalizeRoleValue(role);
@@ -2149,17 +3541,146 @@ app.put(
         updates.password_hash = password;
       }
 
-      if (Object.keys(updates).length === 0) {
-        return c.json({ error: "No updates provided" }, 400);
+      const targetRole = normalizeRoleValue(
+        updates.role || existingUser.role || "",
+      );
+      const currentRole = normalizeRoleValue(existingUser.role);
+      const targetRoleDefinition = await getRoleDefinition(
+        supabase,
+        targetRole,
+      );
+      const isEditingSelf = Number(actingUser?.id) === numericUserId;
+
+      if (
+        isEditingSelf &&
+        normalizeRoleValue(actingUser?.role) === "super_admin" &&
+        targetRole !== "super_admin"
+      ) {
+        return c.json(
+          {
+            error: "Super Admin cannot remove their own Super Admin role",
+          },
+          400,
+        );
       }
 
-      const { error } = await supabase
-        .from("admin_users")
-        .update(updates)
-        .eq("id", Number(userId));
+      if (
+        targetRole === "doctor" &&
+        currentRole !== "doctor" &&
+        doctorServices === undefined
+      ) {
+        return c.json(
+          {
+            error:
+              "Select at least one service when changing this user to doctor",
+          },
+          400,
+        );
+      }
 
-      if (error) {
-        throw error;
+      if (
+        targetRole === "doctor" &&
+        doctorServices !== undefined &&
+        normalizedDoctorServices.length === 0
+      ) {
+        return c.json(
+          {
+            error: "At least one service must be selected for a doctor account",
+          },
+          400,
+        );
+      }
+
+      if (Object.keys(updates).length === 0 && doctorServices === undefined) {
+        if (userPermissions === undefined) {
+          return c.json({ error: "No updates provided" }, 400);
+        }
+      }
+
+      if (Object.keys(updates).length > 0) {
+        const { error } = await supabase
+          .from("admin_users")
+          .update(updates)
+          .eq("id", numericUserId);
+
+        if (error) {
+          throw error;
+        }
+      }
+
+      if (userPermissions !== undefined) {
+        const effectivePermissions = mergeUserPermissions(
+          targetRoleDefinition.permissions,
+          buildPermissionsOverride(
+            userPermissions,
+            targetRoleDefinition.permissions,
+          ),
+        );
+
+        if (
+          isEditingSelf &&
+          normalizeRoleValue(actingUser?.role) === "super_admin" &&
+          !hasRequiredSuperAdminAccess(effectivePermissions)
+        ) {
+          return c.json(
+            {
+              error:
+                "Super Admin cannot remove their own Dashboard, Settings, or Manage Users access",
+            },
+            400,
+          );
+        }
+
+        const permissionsOverride = buildPermissionsOverride(
+          userPermissions,
+          targetRoleDefinition.permissions,
+        );
+
+        const { error: permissionsError } = await supabase
+          .from("admin_users")
+          .update({ permissions_override: permissionsOverride })
+          .eq("id", numericUserId);
+
+        if (permissionsError) {
+          throw permissionsError;
+        }
+      }
+
+      if (targetRole === "doctor") {
+        if (doctorServices !== undefined) {
+          const { error: deleteError } = await supabase
+            .from("doctor_service_assignments")
+            .delete()
+            .eq("doctor_id", numericUserId);
+
+          if (deleteError) {
+            throw deleteError;
+          }
+
+          if (normalizedDoctorServices.length > 0) {
+            const { error: insertError } = await supabase
+              .from("doctor_service_assignments")
+              .insert(
+                normalizedDoctorServices.map((serviceType) => ({
+                  doctor_id: numericUserId,
+                  service_type: serviceType,
+                })),
+              );
+
+            if (insertError) {
+              throw insertError;
+            }
+          }
+        }
+      } else {
+        const { error: clearError } = await supabase
+          .from("doctor_service_assignments")
+          .delete()
+          .eq("doctor_id", numericUserId);
+
+        if (clearError) {
+          throw clearError;
+        }
       }
 
       return c.json({ success: true });
@@ -2240,37 +3761,42 @@ app.get("/make-server-34100c2d/booking-contacts", requireAuth, async (c) => {
   }
 });
 // Get activity log
-app.get("/make-server-34100c2d/activity", requireAuth, async (c) => {
-  try {
-    const supabase = getSupabaseClient();
-    const { data, error } = await supabase
-      .from("activity_log")
-      .select("*")
-      .order("timestamp", { ascending: false })
-      .limit(100);
+app.get(
+  "/make-server-34100c2d/activity",
+  requireAuth,
+  requireSuperAdmin,
+  async (c) => {
+    try {
+      const supabase = getSupabaseClient();
+      const { data, error } = await supabase
+        .from("activity_log")
+        .select("*")
+        .order("timestamp", { ascending: false })
+        .limit(100);
 
-    if (error) {
-      throw error;
+      if (error) {
+        throw error;
+      }
+
+      // Transform to match expected format
+      const activities = (data || []).map((log) => ({
+        type: log.type,
+        user: log.user_name,
+        timestamp: log.timestamp,
+        description: log.description,
+        bookingId: log.booking_id,
+      }));
+
+      return c.json({ success: true, activities });
+    } catch (error) {
+      console.error("Get activity error:", error);
+      return c.json(
+        { error: "Failed to fetch activity log: " + error.message },
+        500,
+      );
     }
-
-    // Transform to match expected format
-    const activities = (data || []).map((log) => ({
-      type: log.type,
-      user: log.user_name,
-      timestamp: log.timestamp,
-      description: log.description,
-      bookingId: log.booking_id,
-    }));
-
-    return c.json({ success: true, activities });
-  } catch (error) {
-    console.error("Get activity error:", error);
-    return c.json(
-      { error: "Failed to fetch activity log: " + error.message },
-      500,
-    );
-  }
-});
+  },
+);
 
 // Get booked slots for a specific date
 app.get("/make-server-34100c2d/booked-slots/:date", async (c) => {

@@ -8,55 +8,54 @@ import {
 } from "./ui/card";
 import { Button } from "./ui/button";
 import { Shield, Stethoscope, Zap, Heart } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 import {
   DEFAULT_AVAILABILITY_CONFIG,
   fetchAvailabilityConfig,
+  fetchServiceCatalog,
   isServiceEnabled,
+  SERVICE_CATALOG,
 } from "../lib/availability";
 
 interface ServicesProps {
   onBookNow: () => void;
 }
 
-const services = [
-  {
-    id: "dental",
+const SERVICE_PRESENTATION: Record<
+  string,
+  { icon: LucideIcon; description: string; color: string }
+> = {
+  dental: {
     icon: Shield,
-    title: "Dental Care",
     description:
       "Comprehensive oral health services including checkups, cleanings, fillings, root canals, and extractions.",
     color: "text-[#9A7B1D]",
   },
-  {
-    id: "medical",
+  medical: {
     icon: Stethoscope,
-    title: "General Medicine",
     description:
       "Primary healthcare services for your overall wellbeing and health management.",
     color: "text-[#9A7B1D]",
   },
-  {
-    id: "iv-therapy",
+  "iv-therapy": {
     icon: Zap,
-    title: "IV Drip Therapy",
     description:
       "Wellness and recovery treatments including hydration, vitamin boosts, and immunity support.",
     color: "text-[#9A7B1D]",
   },
-  {
-    id: "physiotherapy",
+  physiotherapy: {
     icon: Heart,
-    title: "Physiotherapy",
     description:
       "Professional rehabilitation and treatment for injuries, pain management, and mobility improvement.",
     color: "text-[#9A7B1D]",
   },
-];
+};
 
 export function Services({ onBookNow }: ServicesProps) {
   const [availabilityConfig, setAvailabilityConfig] = useState(
     DEFAULT_AVAILABILITY_CONFIG,
   );
+  const [serviceCatalog, setServiceCatalog] = useState(SERVICE_CATALOG);
   const [availabilityLoading, setAvailabilityLoading] = useState(true);
 
   useEffect(() => {
@@ -69,9 +68,28 @@ export function Services({ onBookNow }: ServicesProps) {
     loadAvailability();
   }, []);
 
-  const activeServices = services.filter((service) =>
-    isServiceEnabled(availabilityConfig, service.id),
-  );
+  useEffect(() => {
+    const loadServiceCatalog = async () => {
+      setServiceCatalog(await fetchServiceCatalog());
+    };
+
+    void loadServiceCatalog();
+  }, []);
+
+  const activeServices = serviceCatalog
+    .filter((service) => isServiceEnabled(availabilityConfig, service.id))
+    .map((service) => {
+      const meta = SERVICE_PRESENTATION[service.id] || {
+        icon: Stethoscope,
+        description: "Integrated healthcare service tailored to your needs.",
+        color: "text-[#9A7B1D]",
+      };
+
+      return {
+        ...service,
+        ...meta,
+      };
+    });
 
   return (
     <section id="services" className="py-20 bg-white">

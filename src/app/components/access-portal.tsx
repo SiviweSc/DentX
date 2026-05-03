@@ -18,6 +18,7 @@ import {
 import {
   DEFAULT_AVAILABILITY_CONFIG,
   fetchAvailabilityConfig,
+  fetchServiceCatalog,
   getAvailableTimeSlots,
   isPractitionerEnabled,
   isDateBookable,
@@ -103,7 +104,13 @@ interface MedicalIntakeContextData {
   bookingId: string;
   patientName: string;
   initialData: Partial<MedicalIntakeData>;
+  bookingInitialData?: Partial<MedicalIntakeData>;
   previousForm?: any;
+}
+
+interface EligibleDoctorOption {
+  id: number;
+  username: string;
 }
 
 const EMPTY_WALKIN_DETAILS: WalkInDetails = {
@@ -189,6 +196,7 @@ function AccessPortalContent({ onClose, onLoginSuccess }: AccessPortalProps) {
     useState<MedicalIntakeOrigin>("medical-form-search");
   const [medicalIntakeContext, setMedicalIntakeContext] =
     useState<MedicalIntakeContextData | null>(null);
+  const [useFreshMedicalFile, setUseFreshMedicalFile] = useState(false);
 
   const [searchTerm, setSearchTerm] = useState("");
   const [searching, setSearching] = useState(false);
@@ -206,6 +214,7 @@ function AccessPortalContent({ onClose, onLoginSuccess }: AccessPortalProps) {
   const [availabilityConfig, setAvailabilityConfig] = useState(
     DEFAULT_AVAILABILITY_CONFIG,
   );
+  const [serviceCatalog, setServiceCatalog] = useState(SERVICE_CATALOG);
   const [availabilityLoading, setAvailabilityLoading] = useState(true);
   const [slotDate, setSlotDate] = useState<Date | undefined>(
     getNormalizedToday(),
@@ -213,6 +222,11 @@ function AccessPortalContent({ onClose, onLoginSuccess }: AccessPortalProps) {
   const [slotTime, setSlotTime] = useState("");
   const [bookedSlots, setBookedSlots] = useState<string[]>([]);
   const [savingBooking, setSavingBooking] = useState(false);
+  const [eligibleDoctors, setEligibleDoctors] = useState<
+    EligibleDoctorOption[]
+  >([]);
+  const [loadingEligibleDoctors, setLoadingEligibleDoctors] = useState(false);
+  const [selectedEligibleDoctorId, setSelectedEligibleDoctorId] = useState("");
 
   const isValidAvailabilityConfig = (
     value: unknown,
@@ -228,6 +242,8 @@ function AccessPortalContent({ onClose, onLoginSuccess }: AccessPortalProps) {
     setSlotDate(getNormalizedToday());
     setSlotTime("");
     setBookedSlots([]);
+    setEligibleDoctors([]);
+    setSelectedEligibleDoctorId("");
   };
 
   const resetWalkInSelection = () => {
@@ -255,6 +271,14 @@ function AccessPortalContent({ onClose, onLoginSuccess }: AccessPortalProps) {
     };
 
     void loadAvailability();
+  }, []);
+
+  useEffect(() => {
+    const loadServiceCatalog = async () => {
+      setServiceCatalog(await fetchServiceCatalog());
+    };
+
+    void loadServiceCatalog();
   }, []);
 
   useEffect(() => {
@@ -347,6 +371,61 @@ function AccessPortalContent({ onClose, onLoginSuccess }: AccessPortalProps) {
   }, [screen, slotDate]);
 
   useEffect(() => {
+    if (screen !== "returning-slot" && screen !== "new-slot") {
+      return;
+    }
+
+    if (!slotDate || !slotTime || !walkInServiceType) {
+      setEligibleDoctors([]);
+      setSelectedEligibleDoctorId("");
+      return;
+    }
+
+    const fetchEligibleDoctors = async () => {
+      try {
+        setLoadingEligibleDoctors(true);
+        const response = await apiFetchPublic(
+          `/eligible-doctors?date=${encodeURIComponent(`${toLocalDateString(slotDate)}T09:00:00`)}&time=${encodeURIComponent(slotTime)}&serviceType=${encodeURIComponent(walkInServiceType)}`,
+        );
+
+        if (!response) {
+          setEligibleDoctors([]);
+          setSelectedEligibleDoctorId("");
+          return;
+        }
+
+        const data = await parseApiResponse(
+          response,
+          "Eligible doctors endpoint",
+        );
+        const doctors = Array.isArray(data?.doctors)
+          ? data.doctors
+              .filter((doctor: any) => Number.isInteger(Number(doctor?.id)))
+              .map((doctor: any) => ({
+                id: Number(doctor.id),
+                username: String(doctor.username || "Doctor"),
+              }))
+          : [];
+
+        setEligibleDoctors(doctors);
+        if (doctors.length === 1) {
+          setSelectedEligibleDoctorId(String(doctors[0].id));
+        } else {
+          setSelectedEligibleDoctorId("");
+        }
+      } catch (error) {
+        console.error("Failed to fetch eligible doctors:", error);
+        setEligibleDoctors([]);
+        setSelectedEligibleDoctorId("");
+      } finally {
+        setLoadingEligibleDoctors(false);
+      }
+    };
+
+    void fetchEligibleDoctors();
+  }, [screen, slotDate, slotTime, walkInServiceType]);
+
+  useEffect(() => {
     if (!slotDate) return;
 
     const fetchBookedSlots = async () => {
@@ -390,14 +469,14 @@ function AccessPortalContent({ onClose, onLoginSuccess }: AccessPortalProps) {
 
   const availableWalkInServices = useMemo(
     () =>
-      SERVICE_CATALOG.filter((service) =>
+      serviceCatalog.filter((service) =>
         isServiceEnabled(safeAvailabilityConfig, service.id),
       ),
-    [safeAvailabilityConfig],
+    [safeAvailabilityConfig, serviceCatalog],
   );
 
   const availableWalkInPractitioners = useMemo(() => {
-    const selectedService = SERVICE_CATALOG.find(
+    const selectedService = serviceCatalog.find(
       (service) => service.id === walkInServiceType,
     );
 
@@ -412,11 +491,11 @@ function AccessPortalContent({ onClose, onLoginSuccess }: AccessPortalProps) {
         practitioner.id,
       ),
     );
-  }, [safeAvailabilityConfig, walkInServiceType]);
+  }, [safeAvailabilityConfig, walkInServiceType, serviceCatalog]);
 
   const selectedService = useMemo(
-    () => SERVICE_CATALOG.find((service) => service.id === walkInServiceType),
-    [walkInServiceType],
+    () => serviceCatalog.find((service) => service.id === walkInServiceType),
+    [walkInServiceType, serviceCatalog],
   );
 
   const selectedPractitioner = useMemo(
@@ -559,6 +638,31 @@ function AccessPortalContent({ onClose, onLoginSuccess }: AccessPortalProps) {
     return slotTimeDate <= new Date();
   }
 
+  const maskPhoneForDisplay = (phone: string | null) => {
+    const raw = String(phone || "").trim();
+    if (!raw) {
+      return "No phone";
+    }
+
+    const digitCount = (raw.match(/\d/g) || []).length;
+    if (digitCount <= 4) {
+      return raw;
+    }
+
+    let digitsSeen = 0;
+    return raw
+      .split("")
+      .map((char) => {
+        if (!/\d/.test(char)) {
+          return char;
+        }
+
+        digitsSeen += 1;
+        return digitsSeen <= digitCount - 4 ? "*" : char;
+      })
+      .join("");
+  };
+
   const handleContinueToReturningService = (patient: PatientSearchResult) => {
     setSelectedPatient(patient);
     resetWalkInSelection();
@@ -619,6 +723,21 @@ function AccessPortalContent({ onClose, onLoginSuccess }: AccessPortalProps) {
       return;
     }
 
+    if (loadingEligibleDoctors) {
+      toast.error("Checking doctor availability. Please wait.");
+      return;
+    }
+
+    if (eligibleDoctors.length === 0) {
+      toast.error("No available doctor for this service and slot");
+      return;
+    }
+
+    if (eligibleDoctors.length > 1 && !selectedEligibleDoctorId) {
+      toast.error("Select a doctor before confirming this booking");
+      return;
+    }
+
     try {
       setSavingBooking(true);
 
@@ -640,6 +759,9 @@ function AccessPortalContent({ onClose, onLoginSuccess }: AccessPortalProps) {
         medicalAidNumber: details.medicalAidNumber,
         source,
         confirmedByAdmin: true,
+        assignedDoctorId: selectedEligibleDoctorId
+          ? Number(selectedEligibleDoctorId)
+          : undefined,
       };
 
       const response = await apiFetchPublic(`/bookings`, {
@@ -655,28 +777,112 @@ function AccessPortalContent({ onClose, onLoginSuccess }: AccessPortalProps) {
       }
 
       const data = await parseApiResponse(response, "Create booking endpoint");
+      const booking = data?.booking || {};
 
       if (source === "walk-in-new") {
-        const booking = data?.booking || {};
         const patientName = `${details.firstName} ${details.lastName}`.trim();
+        const bookingInitialData = {
+          patient_first_name: details.firstName || "",
+          patient_surname: details.lastName || "",
+          patient_cell: details.phone || "",
+          patient_email: details.email || "",
+          patient_id_number: details.idNumber || "",
+          medical_aid_name: details.medicalAid || "",
+          medical_aid_number: details.medicalAidNumber || "",
+        };
 
+        setUseFreshMedicalFile(false);
         setMedicalIntakeContext({
           bookingId: String(booking?.id || ""),
           patientName: patientName || "Patient",
-          initialData: {
-            patient_first_name: details.firstName || "",
-            patient_surname: details.lastName || "",
-            patient_cell: details.phone || "",
-            patient_email: details.email || "",
-            patient_id_number: details.idNumber || "",
-            medical_aid_name: details.medicalAid || "",
-            medical_aid_number: details.medicalAidNumber || "",
-          },
+          initialData: bookingInitialData,
+          bookingInitialData,
         });
 
         toast.success(
           "Walk-in booking confirmed. Please complete the new client medical form.",
         );
+        setMedicalIntakeOrigin("walkin-type");
+        setScreen("medical-intake");
+        return;
+      }
+
+      if (source === "walk-in-existing") {
+        let previousForm: any = null;
+
+        try {
+          const lookupQuery = details.idNumber?.trim() || details.phone?.trim();
+          if (lookupQuery) {
+            const lookupResponse = await apiFetchPublic(
+              `/medical-intake/lookup`,
+              {
+                method: "POST",
+                headers: {
+                  "Content-Type": "application/json",
+                },
+                body: JSON.stringify({ query: lookupQuery }),
+              },
+            );
+
+            if (lookupResponse) {
+              const lookupData = await parseApiResponse(
+                lookupResponse,
+                "Medical form lookup endpoint",
+              );
+              previousForm = lookupData?.previousForm || null;
+            }
+          }
+        } catch (error) {
+          console.error("Failed to lookup previous medical form:", error);
+        }
+
+        const previousPayload = previousForm?.form_payload || {};
+        const patientName = `${details.firstName} ${details.lastName}`.trim();
+        const bookingInitialData = {
+          patient_first_name: booking?.first_name || details.firstName || "",
+          patient_surname: booking?.last_name || details.lastName || "",
+          patient_cell: booking?.phone || details.phone || "",
+          patient_email: booking?.email || details.email || "",
+          patient_id_number: booking?.id_number || details.idNumber || "",
+          medical_aid_name: booking?.medical_aid || details.medicalAid || "",
+          medical_aid_number:
+            booking?.medical_aid_number || details.medicalAidNumber || "",
+        };
+
+        setUseFreshMedicalFile(false);
+        setMedicalIntakeContext({
+          bookingId: String(booking?.id || ""),
+          patientName: patientName || "Patient",
+          previousForm,
+          bookingInitialData,
+          initialData: previousForm
+            ? {
+                patient_first_name:
+                  previousPayload.patient_first_name ||
+                  bookingInitialData.patient_first_name,
+                patient_surname:
+                  previousPayload.patient_surname ||
+                  bookingInitialData.patient_surname,
+                patient_cell:
+                  previousPayload.patient_cell ||
+                  bookingInitialData.patient_cell,
+                patient_email:
+                  previousPayload.patient_email ||
+                  bookingInitialData.patient_email,
+                patient_id_number:
+                  previousPayload.patient_id_number ||
+                  bookingInitialData.patient_id_number,
+                medical_aid_name:
+                  previousPayload.medical_aid_name ||
+                  bookingInitialData.medical_aid_name,
+                medical_aid_number:
+                  previousPayload.medical_aid_number ||
+                  bookingInitialData.medical_aid_number,
+              }
+            : bookingInitialData,
+        });
+
+        toast.success("Walk-in booking confirmed. Open medical file.");
         setMedicalIntakeOrigin("walkin-type");
         setScreen("medical-intake");
         return;
@@ -725,19 +931,22 @@ function AccessPortalContent({ onClose, onLoginSuccess }: AccessPortalProps) {
       const booking = data.booking;
       const patientName =
         `${booking?.first_name || ""} ${booking?.last_name || ""}`.trim();
+      const bookingInitialData = {
+        patient_first_name: booking?.first_name || "",
+        patient_surname: booking?.last_name || "",
+        patient_cell: booking?.phone || "",
+        patient_email: booking?.email || "",
+        patient_id_number: booking?.id_number || "",
+        medical_aid_name: booking?.medical_aid || "",
+        medical_aid_number: booking?.medical_aid_number || "",
+      };
 
+      setUseFreshMedicalFile(false);
       setMedicalIntakeContext({
         bookingId: String(booking?.id || ""),
         patientName: patientName || "Patient",
-        initialData: {
-          patient_first_name: booking?.first_name || "",
-          patient_surname: booking?.last_name || "",
-          patient_cell: booking?.phone || "",
-          patient_email: booking?.email || "",
-          patient_id_number: booking?.id_number || "",
-          medical_aid_name: booking?.medical_aid || "",
-          medical_aid_number: booking?.medical_aid_number || "",
-        },
+        initialData: bookingInitialData,
+        bookingInitialData,
       });
 
       toast.success("Check-in successful");
@@ -777,6 +986,7 @@ function AccessPortalContent({ onClose, onLoginSuccess }: AccessPortalProps) {
     await parseApiResponse(response, "Medical intake endpoint");
 
     setMedicalIntakeContext(null);
+    setUseFreshMedicalFile(false);
     setCheckinPhone("");
     setCheckinId("");
     setFormLookupQuery("");
@@ -825,11 +1035,22 @@ function AccessPortalContent({ onClose, onLoginSuccess }: AccessPortalProps) {
       const patientName =
         `${booking?.first_name || ""} ${booking?.last_name || ""}`.trim() ||
         "Patient";
+      const bookingInitialData = {
+        patient_first_name: booking?.first_name || "",
+        patient_surname: booking?.last_name || "",
+        patient_cell: booking?.phone || "",
+        patient_email: booking?.email || "",
+        patient_id_number: booking?.id_number || "",
+        medical_aid_name: booking?.medical_aid || "",
+        medical_aid_number: booking?.medical_aid_number || "",
+      };
 
+      setUseFreshMedicalFile(false);
       setMedicalIntakeContext({
         bookingId: String(booking?.id || ""),
         patientName,
         previousForm,
+        bookingInitialData,
         initialData: {
           patient_first_name:
             previousPayload.patient_first_name || booking?.first_name || "",
@@ -921,6 +1142,7 @@ function AccessPortalContent({ onClose, onLoginSuccess }: AccessPortalProps) {
 
             if (screen === "medical-intake") {
               setMedicalIntakeContext(null);
+              setUseFreshMedicalFile(false);
               setScreen(medicalIntakeOrigin);
               return;
             }
@@ -1001,6 +1223,48 @@ function AccessPortalContent({ onClose, onLoginSuccess }: AccessPortalProps) {
           </div>
         )}
 
+        <div className="mt-4 rounded-lg border border-gray-200 bg-gray-50 p-3">
+          <p className="text-sm font-medium text-gray-700 mb-2">
+            Doctor Assignment
+          </p>
+
+          {loadingEligibleDoctors ? (
+            <p className="text-sm text-gray-500">
+              Checking available doctors...
+            </p>
+          ) : !slotDate || !slotTime ? (
+            <p className="text-sm text-gray-500">Select date and time first.</p>
+          ) : eligibleDoctors.length === 0 ? (
+            <p className="text-sm text-red-600">
+              No doctor is available for this service and slot.
+            </p>
+          ) : eligibleDoctors.length === 1 ? (
+            <p className="text-sm text-green-700">
+              Auto-assigned: Dr. {eligibleDoctors[0].username}
+            </p>
+          ) : (
+            <div className="space-y-2">
+              <p className="text-xs text-amber-700">
+                Multiple doctors are available. Select one to continue.
+              </p>
+              <select
+                value={selectedEligibleDoctorId}
+                onChange={(event) =>
+                  setSelectedEligibleDoctorId(event.target.value)
+                }
+                className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#9A7B1D]"
+              >
+                <option value="">Select doctor</option>
+                {eligibleDoctors.map((doctor) => (
+                  <option key={doctor.id} value={String(doctor.id)}>
+                    Dr. {doctor.username}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+        </div>
+
         <div className="mt-6 flex items-center justify-between">
           <div className="text-sm text-gray-600">
             {slotDate && slotTime
@@ -1015,7 +1279,13 @@ function AccessPortalContent({ onClose, onLoginSuccess }: AccessPortalProps) {
           </div>
           <Button
             onClick={onContinue}
-            disabled={!slotDate || !slotTime}
+            disabled={
+              !slotDate ||
+              !slotTime ||
+              loadingEligibleDoctors ||
+              eligibleDoctors.length === 0 ||
+              (eligibleDoctors.length > 1 && !selectedEligibleDoctorId)
+            }
             className="bg-[#9A7B1D] hover:bg-[#7d6418]"
           >
             Continue
@@ -1282,7 +1552,9 @@ function AccessPortalContent({ onClose, onLoginSuccess }: AccessPortalProps) {
                 disabled={formLookupLoading || !formLookupQuery.trim()}
                 className="w-full bg-[#9A7B1D] hover:bg-[#7d6418]"
               >
-                {formLookupLoading ? "Checking booking..." : "Find Booking"}
+                {formLookupLoading
+                  ? "Checking booking..."
+                  : "Fill Medical Form"}
               </Button>
             </div>
           </div>
@@ -1343,7 +1615,7 @@ function AccessPortalContent({ onClose, onLoginSuccess }: AccessPortalProps) {
             Completing medical file for {medicalIntakeContext.patientName}
           </div>
 
-          {medicalIntakeContext.previousForm && (
+          {medicalIntakeContext.previousForm ? (
             <div className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-900">
               <p className="font-semibold mb-1">Previous Medical Form Found</p>
               <p>
@@ -1363,14 +1635,59 @@ function AccessPortalContent({ onClose, onLoginSuccess }: AccessPortalProps) {
                     })()
                   : "Unknown"}
               </p>
+              <div className="mt-3 flex flex-wrap gap-2">
+                <Button
+                  type="button"
+                  variant={useFreshMedicalFile ? "outline" : "default"}
+                  className={
+                    useFreshMedicalFile
+                      ? ""
+                      : "bg-[#9A7B1D] hover:bg-[#7d6418] text-white"
+                  }
+                  onClick={() => setUseFreshMedicalFile(false)}
+                >
+                  View Existing File
+                </Button>
+                <Button
+                  type="button"
+                  variant={useFreshMedicalFile ? "default" : "outline"}
+                  className={
+                    useFreshMedicalFile
+                      ? "bg-[#9A7B1D] hover:bg-[#7d6418] text-white"
+                      : ""
+                  }
+                  onClick={() => setUseFreshMedicalFile(true)}
+                >
+                  I Need A New File
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <div className="rounded-xl border border-gray-200 bg-white px-4 py-3 text-sm text-gray-700 flex flex-wrap items-center justify-between gap-3">
+              <p>No previous medical file was found for this patient.</p>
+              <Button
+                type="button"
+                variant="default"
+                className="bg-[#9A7B1D] hover:bg-[#7d6418] text-white"
+                onClick={() => setUseFreshMedicalFile(true)}
+              >
+                I Need A New File
+              </Button>
             </div>
           )}
 
           <MedicalIntakeForm
-            initialData={medicalIntakeContext.initialData}
+            key={`${medicalIntakeContext.bookingId}-${useFreshMedicalFile ? "fresh" : "existing"}`}
+            initialData={
+              useFreshMedicalFile
+                ? medicalIntakeContext.bookingInitialData ||
+                  medicalIntakeContext.initialData
+                : medicalIntakeContext.initialData
+            }
             onSubmit={handleMedicalIntakeSubmit}
             onCancel={() => {
               setMedicalIntakeContext(null);
+              setUseFreshMedicalFile(false);
               setScreen(medicalIntakeOrigin);
             }}
           />
@@ -1380,30 +1697,11 @@ function AccessPortalContent({ onClose, onLoginSuccess }: AccessPortalProps) {
       {screen === "returning-search" && (
         <div className="min-h-[70vh] px-4 py-10 flex items-center justify-center">
           <div className="w-full max-w-2xl">
-            <div className="flex justify-end mb-4">
-              <Button
-                variant="outline"
-                onClick={() => {
-                  setFormLookupQuery("");
-                  setMedicalFormOrigin("returning-search");
-                  setMedicalIntakeOrigin("medical-form-search");
-                  setScreen("medical-form-search");
-                }}
-              >
-                Fill Medical Form
-              </Button>
-            </div>
-
-            <img
-              src={logo}
-              alt="DentX Quarters"
-              className="h-20 mx-auto mb-6"
-            />
             <h2 className="text-2xl text-center text-gray-900 mb-2">
               Find Returning Patient
             </h2>
             <p className="text-center text-gray-500 mb-6">
-              Search by first name or last name
+              Search by first name or last name to continue.
             </p>
 
             <div className="relative mb-4">
@@ -1439,7 +1737,7 @@ function AccessPortalContent({ onClose, onLoginSuccess }: AccessPortalProps) {
                         {(patient.last_name || "").trim()}
                       </p>
                       <p className="text-xs text-gray-500 mt-0.5">
-                        {patient.phone || "No phone"}
+                        {maskPhoneForDisplay(patient.phone)}
                       </p>
                     </button>
                   ))}

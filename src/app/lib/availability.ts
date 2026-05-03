@@ -59,6 +59,18 @@ const DAY_INDEX_TO_KEY: OperatingDayKey[] = [
   "saturday",
 ];
 
+const formatLabelFromSlug = (value: string) => {
+  if (value === "not-sure") {
+    return "I'm not sure";
+  }
+
+  return String(value || "")
+    .split("-")
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+};
+
 const DEFAULT_OPERATING_HOURS: Record<
   OperatingDayKey,
   OperatingHoursDayConfig
@@ -244,6 +256,46 @@ export const normalizeAvailabilityConfig = (
 ): AvailabilityConfig => {
   const normalized = cloneDefaultConfig();
 
+  const incomingServices =
+    config?.services && typeof config.services === "object"
+      ? config.services
+      : {};
+
+  for (const [serviceId, incomingServiceRaw] of Object.entries(
+    incomingServices,
+  )) {
+    const incomingService =
+      incomingServiceRaw && typeof incomingServiceRaw === "object"
+        ? (incomingServiceRaw as AvailabilityServiceConfig)
+        : ({ enabled: true, practitioners: {} } as AvailabilityServiceConfig);
+
+    if (!normalized.services[serviceId]) {
+      normalized.services[serviceId] = {
+        enabled: true,
+        practitioners: {},
+      };
+    }
+
+    if (typeof incomingService.enabled === "boolean") {
+      normalized.services[serviceId].enabled = incomingService.enabled;
+    }
+
+    const incomingPractitioners =
+      incomingService.practitioners &&
+      typeof incomingService.practitioners === "object"
+        ? incomingService.practitioners
+        : {};
+
+    for (const [practitionerId, practitionerEnabled] of Object.entries(
+      incomingPractitioners,
+    )) {
+      if (typeof practitionerEnabled === "boolean") {
+        normalized.services[serviceId].practitioners[practitionerId] =
+          practitionerEnabled;
+      }
+    }
+  }
+
   for (const service of SERVICE_CATALOG) {
     const serviceConfig = config?.services?.[service.id];
 
@@ -310,6 +362,58 @@ export const fetchAvailabilityConfig =
       return cloneDefaultConfig();
     }
   };
+
+export const fetchServiceCatalog = async (): Promise<ServiceCatalogItem[]> => {
+  try {
+    const response = await fetchAdminApi("/service-catalog");
+
+    if (!response || !response.ok) {
+      return SERVICE_CATALOG;
+    }
+
+    const data = await response.json();
+    const services = Array.isArray(data?.services) ? data.services : [];
+
+    const catalog = services
+      .map((service: any) => {
+        const serviceId = String(service?.id || "").trim();
+        if (!serviceId) {
+          return null;
+        }
+
+        const practitionerItems = Array.isArray(service?.practitioners)
+          ? service.practitioners
+              .map((practitioner: any) => {
+                const practitionerId = String(practitioner?.id || "").trim();
+                if (!practitionerId) {
+                  return null;
+                }
+
+                return {
+                  id: practitionerId,
+                  title:
+                    String(practitioner?.title || "").trim() ||
+                    formatLabelFromSlug(practitionerId),
+                };
+              })
+              .filter(Boolean)
+          : [];
+
+        return {
+          id: serviceId,
+          title:
+            String(service?.title || "").trim() ||
+            formatLabelFromSlug(serviceId),
+          practitioners: practitionerItems,
+        };
+      })
+      .filter(Boolean) as ServiceCatalogItem[];
+
+    return catalog.length > 0 ? catalog : SERVICE_CATALOG;
+  } catch {
+    return SERVICE_CATALOG;
+  }
+};
 
 export const updateAvailabilityConfig = async (
   config: AvailabilityConfig,

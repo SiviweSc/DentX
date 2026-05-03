@@ -48,6 +48,7 @@ import { toast } from "sonner";
 import {
   DEFAULT_AVAILABILITY_CONFIG,
   fetchAvailabilityConfig,
+  fetchServiceCatalog,
   getAvailableTimeSlots,
   isOperatingHoursRangeValid,
   OPERATING_DAYS,
@@ -88,6 +89,7 @@ export function AdminDashboard({
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const normalizedRole = normalizeUserRole(currentUserRole);
   const permissions = sanitizeRolePermissions(currentUserPermissions);
+  const isSuperAdmin = normalizedRole === "super_admin";
 
   const menuItems = [
     {
@@ -121,22 +123,10 @@ export function AdminDashboard({
       visible: permissions.practice,
     },
     {
-      id: "activity",
-      label: "Activity Log",
-      icon: ActivityIcon,
-      visible: permissions.activity,
-    },
-    {
       id: "settings",
       label: "Settings",
       icon: ClipboardList,
       visible: true,
-    },
-    {
-      id: "users",
-      label: "User Management",
-      icon: User,
-      visible: permissions.manageUsers,
     },
   ];
   const visibleMenuItems = menuItems.filter((item) => item.visible);
@@ -251,7 +241,12 @@ export function AdminDashboard({
         </aside>
 
         <main className="flex-1 overflow-y-auto p-4 md:p-8 md:ml-0">
-          {activeSection === "dashboard" && <DashboardContent />}
+          {activeSection === "dashboard" && (
+            <DashboardContent
+              canCreateBooking={permissions.calendar}
+              onCreateBooking={() => setActiveSection("calendar")}
+            />
+          )}
           {activeSection === "calendar" && (
             <BookingCalendar
               authToken={authToken}
@@ -259,6 +254,7 @@ export function AdminDashboard({
               currentUserRole={normalizedRole}
               canConfirmBooking={permissions.bookingsConfirm}
               canCompleteBooking={permissions.bookingsComplete}
+              canDeleteBooking={permissions.bookingsDelete}
             />
           )}
           {activeSection === "bookings" && (
@@ -280,19 +276,13 @@ export function AdminDashboard({
               canManageAvailability={permissions.manageAvailability}
             />
           )}
-          {activeSection === "activity" && <ActivityContent />}
           {activeSection === "settings" && (
             <SettingsContent
               authToken={authToken}
               currentUserId={currentUserId}
               currentUserRole={normalizedRole}
               canManageAvailability={permissions.manageAvailability}
-            />
-          )}
-          {activeSection === "users" && (
-            <UserManagementContent
-              authToken={authToken}
-              canManageUsers={permissions.manageUsers}
+              isSuperAdmin={isSuperAdmin}
             />
           )}
         </main>
@@ -311,6 +301,7 @@ function AvailabilitySettingsPanel({
   const [availabilityConfig, setAvailabilityConfig] = useState(
     DEFAULT_AVAILABILITY_CONFIG,
   );
+  const [serviceCatalog, setServiceCatalog] = useState(SERVICE_CATALOG);
   const [loadingAvailability, setLoadingAvailability] = useState(true);
   const [savingKey, setSavingKey] = useState<string | null>(null);
 
@@ -322,6 +313,14 @@ function AvailabilitySettingsPanel({
     };
 
     loadAvailability();
+  }, []);
+
+  useEffect(() => {
+    const loadServiceCatalog = async () => {
+      setServiceCatalog(await fetchServiceCatalog());
+    };
+
+    void loadServiceCatalog();
   }, []);
 
   const persistAvailability = async (
@@ -337,12 +336,17 @@ function AvailabilitySettingsPanel({
   };
 
   const toggleService = async (serviceId: string, enabled: boolean) => {
+    const currentService = availabilityConfig.services[serviceId] || {
+      enabled: true,
+      practitioners: {},
+    };
+
     const nextConfig = {
       ...availabilityConfig,
       services: {
         ...availabilityConfig.services,
         [serviceId]: {
-          ...availabilityConfig.services[serviceId],
+          ...currentService,
           enabled,
         },
       },
@@ -357,14 +361,19 @@ function AvailabilitySettingsPanel({
     practitionerId: string,
     enabled: boolean,
   ) => {
+    const currentService = availabilityConfig.services[serviceId] || {
+      enabled: true,
+      practitioners: {},
+    };
+
     const nextConfig = {
       ...availabilityConfig,
       services: {
         ...availabilityConfig.services,
         [serviceId]: {
-          ...availabilityConfig.services[serviceId],
+          ...currentService,
           practitioners: {
-            ...availabilityConfig.services[serviceId].practitioners,
+            ...currentService.practitioners,
             [practitionerId]: enabled,
           },
         },
@@ -536,8 +545,13 @@ function AvailabilitySettingsPanel({
               <p className="text-gray-500">Loading availability settings...</p>
             ) : (
               <div className="space-y-4">
-                {SERVICE_CATALOG.map((service) => {
-                  const serviceConfig = availabilityConfig.services[service.id];
+                {serviceCatalog.map((service) => {
+                  const serviceConfig = availabilityConfig.services[
+                    service.id
+                  ] || {
+                    enabled: true,
+                    practitioners: {},
+                  };
 
                   return (
                     <div
@@ -592,21 +606,24 @@ function AvailabilitySettingsPanel({
                             <div className="flex items-center gap-3">
                               <Badge
                                 className={
-                                  availabilityConfig.services[service.id]
-                                    .practitioners[practitioner.id]
+                                  serviceConfig.practitioners[
+                                    practitioner.id
+                                  ] !== false
                                     ? "bg-green-100 text-green-800"
                                     : "bg-gray-100 text-gray-700"
                                 }
                               >
-                                {availabilityConfig.services[service.id]
-                                  .practitioners[practitioner.id]
+                                {serviceConfig.practitioners[
+                                  practitioner.id
+                                ] !== false
                                   ? "On"
                                   : "Off"}
                               </Badge>
                               <Switch
                                 checked={
-                                  availabilityConfig.services[service.id]
-                                    .practitioners[practitioner.id]
+                                  serviceConfig.practitioners[
+                                    practitioner.id
+                                  ] !== false
                                 }
                                 disabled={
                                   !serviceConfig.enabled ||
@@ -637,7 +654,13 @@ function AvailabilitySettingsPanel({
   );
 }
 
-function DashboardContent() {
+function DashboardContent({
+  canCreateBooking,
+  onCreateBooking,
+}: {
+  canCreateBooking: boolean;
+  onCreateBooking: () => void;
+}) {
   const [stats, setStats] = useState({
     totalBookings: 0,
     pendingBookings: 0,
@@ -789,7 +812,10 @@ function DashboardContent() {
           <CardTitle>Weekly Calendar</CardTitle>
         </CardHeader>
         <CardContent>
-          <WeeklyCalendar />
+          <WeeklyCalendar
+            canCreateBooking={canCreateBooking}
+            onCreateBooking={onCreateBooking}
+          />
         </CardContent>
       </Card>
 
@@ -806,7 +832,13 @@ function DashboardContent() {
   );
 }
 
-function WeeklyCalendar() {
+function WeeklyCalendar({
+  canCreateBooking,
+  onCreateBooking,
+}: {
+  canCreateBooking: boolean;
+  onCreateBooking: () => void;
+}) {
   const [weekBookings, setWeekBookings] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [currentWeekStart, setCurrentWeekStart] = useState(
@@ -911,6 +943,16 @@ function WeeklyCalendar() {
           {format(weekDays[6], "MMM d, yyyy")}
         </h3>
         <div className="flex gap-1 sm:gap-2">
+          {canCreateBooking && (
+            <Button
+              size="sm"
+              onClick={onCreateBooking}
+              className="text-xs sm:text-sm bg-[#9A7B1D] hover:bg-[#7d6418]"
+            >
+              <Plus className="w-4 h-4 mr-1 sm:mr-2" />
+              Create Booking
+            </Button>
+          )}
           <Button
             variant="outline"
             size="sm"
@@ -2098,6 +2140,17 @@ function PatientsContent() {
       normalizeDocumentCategory(document.category) ===
       activeDocumentCategoryTab,
   );
+  const medicalIntakeDocuments = patientDocuments.filter((document) => {
+    const category = normalizeDocumentCategory(document.category);
+    const title = String(document.title || "").toLowerCase();
+    const fileName = String(document.file_name || "").toLowerCase();
+
+    if (category !== "consent-form" && category !== "medical-record") {
+      return false;
+    }
+
+    return title.includes("intake") || fileName.includes("intake");
+  });
 
   const getDocumentFolderName = (category: string) => {
     const folderMap: Record<string, string> = {
@@ -2195,7 +2248,38 @@ function PatientsContent() {
         );
       }
 
-      setMedicalIntakeForms(directFormsResult || []);
+      let linkedMedicalForms = directFormsResult || [];
+
+      if (linkedMedicalForms.length === 0 && activePatient) {
+        const fallbackFilters: string[] = [];
+        if (activePatient.id_number) {
+          fallbackFilters.push(`id_number.eq.${activePatient.id_number}`);
+        }
+        if (activePatient.phone) {
+          fallbackFilters.push(`phone.eq.${activePatient.phone}`);
+        }
+
+        if (fallbackFilters.length > 0) {
+          const { data: fallbackForms, error: fallbackFormsError } =
+            await supabase
+              .from("medical_intake")
+              .select("*")
+              .or(fallbackFilters.join(","))
+              .order("created_at", { ascending: false })
+              .limit(100);
+
+          if (fallbackFormsError) {
+            console.error(
+              "Failed to fetch fallback medical intake forms:",
+              fallbackFormsError,
+            );
+          } else {
+            linkedMedicalForms = fallbackForms || [];
+          }
+        }
+      }
+
+      setMedicalIntakeForms(linkedMedicalForms);
 
       if (medicalResult.error) {
         console.error("Failed to fetch medical details:", medicalResult.error);
@@ -3385,7 +3469,8 @@ function PatientsContent() {
                   Submitted Medical Intake Forms
                 </p>
 
-                {medicalIntakeForms.length === 0 ? (
+                {medicalIntakeForms.length === 0 &&
+                medicalIntakeDocuments.length === 0 ? (
                   <p className="text-sm text-gray-500">
                     No submitted intake form found for this patient yet.
                   </p>
@@ -3455,6 +3540,42 @@ function PatientsContent() {
                         </div>
                       );
                     })}
+
+                    {medicalIntakeDocuments.map((document) => (
+                      <div
+                        key={`intake-doc-${document.id}`}
+                        className="rounded-lg border border-blue-200 bg-blue-50 p-3"
+                      >
+                        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+                          <div>
+                            <p className="text-sm font-semibold text-blue-900">
+                              {document.title || "Submitted intake PDF"}
+                            </p>
+                            <p className="text-xs text-blue-700 mt-1">
+                              {document.file_name || "medical-intake.pdf"}
+                            </p>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <p className="text-xs text-blue-700">
+                              {document.created_at
+                                ? format(
+                                    new Date(document.created_at),
+                                    "d MMM yyyy, HH:mm",
+                                  )
+                                : "Unknown upload date"}
+                            </p>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="text-blue-700 border-blue-300 hover:bg-blue-100"
+                              onClick={() => void handleOpenDocument(document)}
+                            >
+                              Open PDF
+                            </Button>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
                   </div>
                 )}
               </div>
@@ -4239,18 +4360,63 @@ function ActivityContent() {
   );
 }
 
-function UserManagementPanel({ authToken }: { authToken: string }) {
+function UserManagementPanel({
+  authToken,
+  currentUserId,
+  currentUserRole,
+}: {
+  authToken: string;
+  currentUserId: number;
+  currentUserRole: UserRole;
+}) {
   const [users, setUsers] = useState<any[]>([]);
   const [roleDefinitions, setRoleDefinitions] = useState<RoleDefinition[]>([]);
+  const [supportedServiceTypes, setSupportedServiceTypes] = useState<
+    Array<{ service_type: string; label: string }>
+  >([]);
   const [loadingUsers, setLoadingUsers] = useState(true);
+  const [loadingServiceTypes, setLoadingServiceTypes] = useState(true);
   const [savingUserId, setSavingUserId] = useState<number | null>(null);
+  const [savingUserPermissionsUserId, setSavingUserPermissionsUserId] =
+    useState<number | null>(null);
+  const [savingDoctorServicesUserId, setSavingDoctorServicesUserId] = useState<
+    number | null
+  >(null);
   const [savingRoleKey, setSavingRoleKey] = useState<string | null>(null);
   const [creatingUser, setCreatingUser] = useState(false);
+  const [creatingServiceType, setCreatingServiceType] = useState(false);
+  const [editingDoctorServicesByUser, setEditingDoctorServicesByUser] =
+    useState<Record<number, string[]>>({});
+  const [editingUserPermissionsByUser, setEditingUserPermissionsByUser] =
+    useState<Record<number, RolePermissions>>({});
+  const [newServiceType, setNewServiceType] = useState({
+    serviceType: "",
+    label: "",
+  });
   const [newUser, setNewUser] = useState({
     username: "",
     password: "",
     role: "admin" as UserRole,
+    doctorServices: [] as string[],
   });
+
+  const doctorServiceOptions =
+    supportedServiceTypes.length > 0
+      ? supportedServiceTypes.map((serviceType) => ({
+          value: serviceType.service_type,
+          label: serviceType.label,
+        }))
+      : SERVICE_CATALOG.map((service) => ({
+          value: service.id,
+          label: service.title,
+        }));
+
+  const doctorServiceLabelByValue = new Map(
+    doctorServiceOptions.map((serviceOption) => [
+      serviceOption.value,
+      serviceOption.label,
+    ]),
+  );
 
   const apiFetchAuth = async (path: string, init?: RequestInit) => {
     let lastResponse: Response | null = null;
@@ -4293,12 +4459,75 @@ function UserManagementPanel({ authToken }: { authToken: string }) {
         return;
       }
 
-      setUsers(data.users || []);
+      const nextUsers = data.users || [];
+      setUsers(nextUsers);
+      setEditingDoctorServicesByUser(
+        nextUsers.reduce((acc: Record<number, string[]>, user: any) => {
+          const userId = Number(user?.id);
+          if (!Number.isInteger(userId)) {
+            return acc;
+          }
+
+          if (normalizeUserRole(user.role) !== "doctor") {
+            return acc;
+          }
+
+          acc[userId] = Array.isArray(user.doctorServices)
+            ? [...user.doctorServices]
+            : [];
+          return acc;
+        }, {}),
+      );
+      setEditingUserPermissionsByUser(
+        nextUsers.reduce((acc: Record<number, RolePermissions>, user: any) => {
+          const userId = Number(user?.id);
+          if (!Number.isInteger(userId)) {
+            return acc;
+          }
+
+          acc[userId] = sanitizeRolePermissions(
+            user.effectivePermissions || user.permissionsOverride,
+          );
+          return acc;
+        }, {}),
+      );
     } catch (error) {
       console.error("Failed to load users:", error);
       toast.error("Could not load users");
     } finally {
       setLoadingUsers(false);
+    }
+  };
+
+  const loadSupportedServiceTypes = async () => {
+    try {
+      setLoadingServiceTypes(true);
+      const response = await apiFetchAuth(`/service-types`);
+      if (!response) {
+        return;
+      }
+
+      const data = await response.json();
+      if (!response.ok || !data.success) {
+        return;
+      }
+
+      const nextServiceTypes = Array.isArray(data.serviceTypes)
+        ? data.serviceTypes
+            .map((entry: any) => ({
+              service_type: String(entry?.service_type || "").trim(),
+              label:
+                String(entry?.label || "").trim() ||
+                String(entry?.service_type || "").trim(),
+            }))
+            .filter((entry: any) => entry.service_type.length > 0)
+        : [];
+
+      setSupportedServiceTypes(nextServiceTypes);
+    } catch (error) {
+      console.error("Failed to load supported service types:", error);
+    } finally {
+      setLoadingServiceTypes(false);
     }
   };
 
@@ -4342,6 +4571,12 @@ function UserManagementPanel({ authToken }: { authToken: string }) {
     value: roleDefinition.role,
     label: roleDefinition.label,
   }));
+  const roleDefinitionByKey = new Map(
+    roleDefinitions.map((roleDefinition) => [
+      roleDefinition.role,
+      roleDefinition,
+    ]),
+  );
 
   const permissionLabels: Array<{
     key: keyof RolePermissions;
@@ -4351,6 +4586,7 @@ function UserManagementPanel({ authToken }: { authToken: string }) {
     { key: "calendar", label: "Access Calendar" },
     { key: "bookings", label: "Access Bookings" },
     { key: "bookingsConfirm", label: "Confirm Bookings" },
+    { key: "bookingsDelete", label: "Delete Bookings" },
     { key: "bookingsComplete", label: "Complete Bookings" },
     { key: "patients", label: "Access Patients" },
     { key: "practice", label: "Access Practice" },
@@ -4359,11 +4595,55 @@ function UserManagementPanel({ authToken }: { authToken: string }) {
     { key: "manageAvailability", label: "Manage Operating Hours" },
     { key: "manageUsers", label: "Manage Users and Roles" },
   ];
+  const protectedSelfPermissionKeys: Array<keyof RolePermissions> = [
+    "dashboard",
+    "settings",
+    "manageUsers",
+  ];
 
   useEffect(() => {
     loadUsers();
     loadRoles();
+    loadSupportedServiceTypes();
   }, []);
+
+  const handleCreateServiceType = async () => {
+    const serviceType = newServiceType.serviceType.trim();
+    const label = newServiceType.label.trim();
+
+    if (!serviceType) {
+      toast.error("Service type key is required");
+      return;
+    }
+
+    try {
+      setCreatingServiceType(true);
+      const response = await apiFetchAuth(`/service-types`, {
+        method: "POST",
+        body: JSON.stringify({ serviceType, label }),
+      });
+
+      if (!response) {
+        toast.error("Could not create service type");
+        return;
+      }
+
+      const data = await response.json();
+      if (!response.ok || !data.success) {
+        toast.error(data.error || "Could not create service type");
+        return;
+      }
+
+      toast.success("Service type added");
+      setNewServiceType({ serviceType: "", label: "" });
+      await loadSupportedServiceTypes();
+    } catch (error) {
+      console.error("Failed to create service type:", error);
+      toast.error("Could not create service type");
+    } finally {
+      setCreatingServiceType(false);
+    }
+  };
 
   const handleRoleChange = async (userId: number, role: UserRole) => {
     try {
@@ -4394,9 +4674,132 @@ function UserManagementPanel({ authToken }: { authToken: string }) {
     }
   };
 
+  const handleDoctorServiceToggle = (
+    userId: number,
+    serviceType: string,
+    checked: boolean,
+  ) => {
+    setEditingDoctorServicesByUser((prev) => {
+      const current = Array.isArray(prev[userId]) ? prev[userId] : [];
+      const next = checked
+        ? Array.from(new Set([...current, serviceType]))
+        : current.filter((service) => service !== serviceType);
+
+      return {
+        ...prev,
+        [userId]: next,
+      };
+    });
+  };
+
+  const handleUserPermissionToggle = (
+    userId: number,
+    permissionKey: keyof RolePermissions,
+    enabled: boolean,
+  ) => {
+    setEditingUserPermissionsByUser((prev) => ({
+      ...prev,
+      [userId]: {
+        ...sanitizeRolePermissions(prev[userId]),
+        [permissionKey]: enabled,
+      },
+    }));
+  };
+
+  const handleSaveUserPermissions = async (user: any) => {
+    const userId = Number(user?.id);
+    if (!Number.isInteger(userId)) {
+      toast.error("Invalid user account");
+      return;
+    }
+
+    const draftPermissions = sanitizeRolePermissions(
+      editingUserPermissionsByUser[userId],
+    );
+
+    try {
+      setSavingUserPermissionsUserId(userId);
+      const response = await apiFetchAuth(`/users/${userId}`, {
+        method: "PUT",
+        body: JSON.stringify({ userPermissions: draftPermissions }),
+      });
+
+      if (!response) {
+        toast.error("Could not update user access");
+        return;
+      }
+
+      const data = await response.json();
+      if (!response.ok || !data.success) {
+        toast.error(data.error || "Could not update user access");
+        return;
+      }
+
+      toast.success("User access updated");
+      await loadUsers();
+    } catch (error) {
+      console.error("Failed to update user access:", error);
+      toast.error("Could not update user access");
+    } finally {
+      setSavingUserPermissionsUserId(null);
+    }
+  };
+
+  const handleSaveDoctorServices = async (user: any) => {
+    const userId = Number(user?.id);
+    const draftServices = Array.isArray(editingDoctorServicesByUser[userId])
+      ? editingDoctorServicesByUser[userId]
+      : [];
+
+    if (!Number.isInteger(userId)) {
+      toast.error("Invalid doctor account");
+      return;
+    }
+
+    if (draftServices.length === 0) {
+      toast.error("Select at least one service for the doctor");
+      return;
+    }
+
+    try {
+      setSavingDoctorServicesUserId(userId);
+      const response = await apiFetchAuth(`/users/${userId}`, {
+        method: "PUT",
+        body: JSON.stringify({ doctorServices: draftServices }),
+      });
+
+      if (!response) {
+        toast.error("Could not update doctor services");
+        return;
+      }
+
+      const data = await response.json();
+      if (!response.ok || !data.success) {
+        toast.error(data.error || "Could not update doctor services");
+        return;
+      }
+
+      toast.success("Doctor services updated");
+      await loadUsers();
+    } catch (error) {
+      console.error("Failed to update doctor services:", error);
+      toast.error("Could not update doctor services");
+    } finally {
+      setSavingDoctorServicesUserId(null);
+    }
+  };
+
   const handleCreateUser = async () => {
     if (!newUser.username.trim() || !newUser.password.trim()) {
       toast.error("Username and password are required");
+      return;
+    }
+
+    if (
+      normalizeUserRole(newUser.role) === "doctor" &&
+      newUser.doctorServices.length === 0
+    ) {
+      toast.error("Select at least one service for the doctor");
       return;
     }
 
@@ -4408,6 +4811,7 @@ function UserManagementPanel({ authToken }: { authToken: string }) {
           username: newUser.username.trim(),
           password: newUser.password,
           role: newUser.role,
+          doctorServices: newUser.doctorServices,
         }),
       });
 
@@ -4427,6 +4831,7 @@ function UserManagementPanel({ authToken }: { authToken: string }) {
         username: "",
         password: "",
         role: roleOptions[0]?.value || prev.role,
+        doctorServices: [],
       }));
       await loadUsers();
     } catch (error) {
@@ -4496,6 +4901,62 @@ function UserManagementPanel({ authToken }: { authToken: string }) {
       </CardHeader>
       <CardContent className="space-y-5">
         <div className="rounded-lg border border-gray-200 p-4">
+          <p className="text-sm font-medium text-gray-800 mb-3">
+            Supported Service Types
+          </p>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            <input
+              type="text"
+              value={newServiceType.serviceType}
+              onChange={(e) =>
+                setNewServiceType((prev) => ({
+                  ...prev,
+                  serviceType: e.target.value,
+                }))
+              }
+              placeholder="Key (example: speech-therapy)"
+              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#9A7B1D]"
+            />
+            <input
+              type="text"
+              value={newServiceType.label}
+              onChange={(e) =>
+                setNewServiceType((prev) => ({
+                  ...prev,
+                  label: e.target.value,
+                }))
+              }
+              placeholder="Label (example: Speech Therapy)"
+              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#9A7B1D]"
+            />
+            <div className="flex items-center gap-2">
+              <Button
+                onClick={handleCreateServiceType}
+                disabled={creatingServiceType}
+                className="bg-[#9A7B1D] hover:bg-[#7d6418] text-white"
+              >
+                {creatingServiceType ? "Adding..." : "Add Service Type"}
+              </Button>
+            </div>
+          </div>
+          <div className="mt-3">
+            {loadingServiceTypes ? (
+              <p className="text-sm text-gray-500">Loading service types...</p>
+            ) : doctorServiceOptions.length === 0 ? (
+              <p className="text-sm text-gray-500">No service types found.</p>
+            ) : (
+              <div className="flex flex-wrap gap-2">
+                {doctorServiceOptions.map((serviceOption) => (
+                  <Badge key={serviceOption.value} variant="outline">
+                    {serviceOption.label} ({serviceOption.value})
+                  </Badge>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="rounded-lg border border-gray-200 p-4">
           <p className="text-sm font-medium text-gray-800 mb-3">Add User</p>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
             <input
@@ -4523,6 +4984,10 @@ function UserManagementPanel({ authToken }: { authToken: string }) {
                   setNewUser((prev) => ({
                     ...prev,
                     role: normalizeUserRole(e.target.value),
+                    doctorServices:
+                      normalizeUserRole(e.target.value) === "doctor"
+                        ? prev.doctorServices
+                        : [],
                   }))
                 }
                 className="flex-1 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#9A7B1D]"
@@ -4542,6 +5007,44 @@ function UserManagementPanel({ authToken }: { authToken: string }) {
               </Button>
             </div>
           </div>
+
+          {normalizeUserRole(newUser.role) === "doctor" && (
+            <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3">
+              <p className="text-xs font-semibold text-amber-900 mb-2">
+                Doctor Services
+              </p>
+              <p className="text-xs text-amber-800 mb-3">
+                Select all services this doctor can provide.
+              </p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                {doctorServiceOptions.map((serviceOption) => (
+                  <label
+                    key={serviceOption.value}
+                    className="flex items-center gap-2 text-sm text-gray-700"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={newUser.doctorServices.includes(
+                        serviceOption.value,
+                      )}
+                      onChange={(event) =>
+                        setNewUser((prev) => ({
+                          ...prev,
+                          doctorServices: event.target.checked
+                            ? [...prev.doctorServices, serviceOption.value]
+                            : prev.doctorServices.filter(
+                                (service) => service !== serviceOption.value,
+                              ),
+                        }))
+                      }
+                      className="h-4 w-4 rounded border-gray-300 text-[#9A7B1D] focus:ring-[#9A7B1D]"
+                    />
+                    <span>{serviceOption.label}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
 
         {loadingUsers ? (
@@ -4550,43 +5053,209 @@ function UserManagementPanel({ authToken }: { authToken: string }) {
           <p className="text-sm text-gray-500">No users found.</p>
         ) : (
           <div className="space-y-2">
-            {users.map((user) => (
-              <div
-                key={user.id}
-                className="rounded-lg border border-gray-200 p-3 flex flex-col md:flex-row gap-3 md:items-center md:justify-between"
-              >
-                <div>
-                  <p className="text-sm font-medium text-gray-900">
-                    {user.username}
-                  </p>
-                  <p className="text-xs text-gray-500">
-                    Last login:{" "}
-                    {user.last_login
-                      ? format(new Date(user.last_login), "d MMM yyyy HH:mm")
-                      : "Never"}
-                  </p>
-                </div>
-                <div className="flex items-center gap-2">
-                  <select
-                    value={normalizeUserRole(user.role)}
-                    onChange={(e) =>
-                      void handleRoleChange(
-                        user.id,
-                        normalizeUserRole(e.target.value),
-                      )
-                    }
-                    disabled={savingUserId === user.id}
-                    className="px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#9A7B1D]"
+            {users.map((user) =>
+              (() => {
+                const isCurrentUser = Number(user.id) === Number(currentUserId);
+                const isProtectedSuperAdminSelf =
+                  isCurrentUser &&
+                  normalizeUserRole(currentUserRole) === "super_admin";
+
+                return (
+                  <div
+                    key={user.id}
+                    className="rounded-lg border border-gray-200 p-3 flex flex-col md:flex-row gap-3 md:items-center md:justify-between"
                   >
-                    {roleOptions.map((roleOption) => (
-                      <option key={roleOption.value} value={roleOption.value}>
-                        {roleOption.label}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-            ))}
+                    <div>
+                      <p className="text-sm font-medium text-gray-900">
+                        {user.username}
+                      </p>
+                      {normalizeUserRole(user.role) === "doctor" && (
+                        <p className="text-xs text-gray-500">
+                          Services:{" "}
+                          {Array.isArray(
+                            editingDoctorServicesByUser[user.id],
+                          ) && editingDoctorServicesByUser[user.id].length > 0
+                            ? editingDoctorServicesByUser[user.id]
+                                .map(
+                                  (serviceKey: string) =>
+                                    doctorServiceLabelByValue.get(serviceKey) ||
+                                    serviceKey,
+                                )
+                                .join(", ")
+                            : "Not assigned"}
+                        </p>
+                      )}
+                      <p className="text-xs text-gray-500">
+                        Last login:{" "}
+                        {user.last_login
+                          ? format(
+                              new Date(user.last_login),
+                              "d MMM yyyy HH:mm",
+                            )
+                          : "Never"}
+                      </p>
+                      {isProtectedSuperAdminSelf && (
+                        <p className="mt-2 text-xs text-amber-700">
+                          Your own Super Admin access is protected from
+                          accidental lockout.
+                        </p>
+                      )}
+
+                      <div className="mt-3 rounded-lg border border-gray-200 bg-gray-50 p-3">
+                        <p className="text-xs font-semibold text-gray-700 mb-1">
+                          User Access Restrictions
+                        </p>
+                        <p className="text-xs text-gray-500 mb-3">
+                          Uncheck permissions to restrict this specific user
+                          below their role defaults.
+                        </p>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                          {permissionLabels.map((permission) => {
+                            const rolePermissions =
+                              roleDefinitionByKey.get(
+                                normalizeUserRole(user.role),
+                              )?.permissions || sanitizeRolePermissions(null);
+                            const draftPermissions = sanitizeRolePermissions(
+                              editingUserPermissionsByUser[user.id],
+                            );
+                            const allowedByRole =
+                              rolePermissions[permission.key] === true;
+                            const isProtectedSelfPermission =
+                              isProtectedSuperAdminSelf &&
+                              protectedSelfPermissionKeys.includes(
+                                permission.key,
+                              );
+
+                            return (
+                              <label
+                                key={`${user.id}-permission-${permission.key}`}
+                                className={`flex items-center gap-2 text-sm ${
+                                  allowedByRole
+                                    ? "text-gray-700"
+                                    : "text-gray-400"
+                                }`}
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={
+                                    allowedByRole &&
+                                    draftPermissions[permission.key] === true
+                                  }
+                                  disabled={
+                                    !allowedByRole ||
+                                    isProtectedSelfPermission ||
+                                    savingUserPermissionsUserId === user.id
+                                  }
+                                  onChange={(event) =>
+                                    handleUserPermissionToggle(
+                                      Number(user.id),
+                                      permission.key,
+                                      event.target.checked,
+                                    )
+                                  }
+                                  className="h-4 w-4 rounded border-gray-300 text-[#9A7B1D] focus:ring-[#9A7B1D]"
+                                />
+                                <span>{permission.label}</span>
+                              </label>
+                            );
+                          })}
+                        </div>
+                        <div className="mt-3 flex justify-end">
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => void handleSaveUserPermissions(user)}
+                            disabled={savingUserPermissionsUserId === user.id}
+                          >
+                            {savingUserPermissionsUserId === user.id
+                              ? "Saving Access..."
+                              : "Save User Access"}
+                          </Button>
+                        </div>
+                      </div>
+
+                      {normalizeUserRole(user.role) === "doctor" && (
+                        <div className="mt-3 rounded-lg border border-gray-200 bg-gray-50 p-3">
+                          <p className="text-xs font-semibold text-gray-700 mb-2">
+                            Edit Doctor Services
+                          </p>
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                            {doctorServiceOptions.map((serviceOption) => {
+                              const selectedServices =
+                                editingDoctorServicesByUser[user.id] || [];
+
+                              return (
+                                <label
+                                  key={`${user.id}-${serviceOption.value}`}
+                                  className="flex items-center gap-2 text-sm text-gray-700"
+                                >
+                                  <input
+                                    type="checkbox"
+                                    checked={selectedServices.includes(
+                                      serviceOption.value,
+                                    )}
+                                    onChange={(event) =>
+                                      handleDoctorServiceToggle(
+                                        Number(user.id),
+                                        serviceOption.value,
+                                        event.target.checked,
+                                      )
+                                    }
+                                    disabled={
+                                      savingDoctorServicesUserId === user.id
+                                    }
+                                    className="h-4 w-4 rounded border-gray-300 text-[#9A7B1D] focus:ring-[#9A7B1D]"
+                                  />
+                                  <span>{serviceOption.label}</span>
+                                </label>
+                              );
+                            })}
+                          </div>
+                          <div className="mt-3 flex justify-end">
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() =>
+                                void handleSaveDoctorServices(user)
+                              }
+                              disabled={savingDoctorServicesUserId === user.id}
+                            >
+                              {savingDoctorServicesUserId === user.id
+                                ? "Saving..."
+                                : "Save Services"}
+                            </Button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <select
+                        value={normalizeUserRole(user.role)}
+                        onChange={(e) =>
+                          void handleRoleChange(
+                            user.id,
+                            normalizeUserRole(e.target.value),
+                          )
+                        }
+                        disabled={
+                          savingUserId === user.id || isProtectedSuperAdminSelf
+                        }
+                        className="px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#9A7B1D]"
+                      >
+                        {roleOptions.map((roleOption) => (
+                          <option
+                            key={roleOption.value}
+                            value={roleOption.value}
+                          >
+                            {roleOption.label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+                );
+              })(),
+            )}
           </div>
         )}
 
@@ -4659,134 +5328,198 @@ function SettingsContent({
   currentUserId,
   currentUserRole,
   canManageAvailability,
+  isSuperAdmin,
 }: {
   authToken: string;
   currentUserId: number;
   currentUserRole: UserRole;
   canManageAvailability: boolean;
+  isSuperAdmin: boolean;
 }) {
+  const [settingsTab, setSettingsTab] = useState<
+    "overview" | "activity" | "users"
+  >("overview");
+
   return (
     <div className="space-y-6">
-      <Card className="border-blue-100 bg-gradient-to-br from-blue-50 to-white">
-        <CardHeader>
-          <CardTitle className="text-blue-900">System Settings</CardTitle>
-          <p className="text-sm text-gray-500 mt-2">
-            View your current system configuration and settings
-          </p>
-        </CardHeader>
-      </Card>
+      <Tabs
+        value={settingsTab}
+        onValueChange={(value) => setSettingsTab(value as typeof settingsTab)}
+      >
+        <TabsList className="w-full justify-start overflow-x-auto gap-2 p-1 h-auto bg-transparent">
+          <TabsTrigger value="overview" className="px-3 py-2">
+            Overview
+          </TabsTrigger>
+          {isSuperAdmin && (
+            <TabsTrigger value="activity" className="px-3 py-2">
+              Activity Log
+            </TabsTrigger>
+          )}
+          {isSuperAdmin && (
+            <TabsTrigger value="users" className="px-3 py-2">
+              User Management
+            </TabsTrigger>
+          )}
+        </TabsList>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-sm">Service Configuration</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <p className="text-xs text-gray-600 mb-4">
-              All available services are currently configured and enabled for
-              patient bookings.
-            </p>
-            <div className="space-y-2">
-              <div className="flex items-center justify-between p-2 bg-gray-50 rounded">
-                <span className="text-sm">Dental Care</span>
-                <span className="text-xs font-semibold text-green-600 bg-green-50 px-2 py-1 rounded">
-                  Active
-                </span>
-              </div>
-              <div className="flex items-center justify-between p-2 bg-gray-50 rounded">
-                <span className="text-sm">General Medicine</span>
-                <span className="text-xs font-semibold text-green-600 bg-green-50 px-2 py-1 rounded">
-                  Active
-                </span>
-              </div>
-              <div className="flex items-center justify-between p-2 bg-gray-50 rounded">
-                <span className="text-sm">IV Drip Therapy</span>
-                <span className="text-xs font-semibold text-green-600 bg-green-50 px-2 py-1 rounded">
-                  Active
-                </span>
-              </div>
-              <div className="flex items-center justify-between p-2 bg-gray-50 rounded">
-                <span className="text-sm">Physiotherapy</span>
-                <span className="text-xs font-semibold text-green-600 bg-green-50 px-2 py-1 rounded">
-                  Active
-                </span>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
+        <TabsContent value="overview" className="space-y-6 mt-4">
+          <Card className="border-blue-100 bg-gradient-to-br from-blue-50 to-white">
+            <CardHeader>
+              <CardTitle className="text-blue-900">System Settings</CardTitle>
+              <p className="text-sm text-gray-500 mt-2">
+                View your current system configuration and settings
+              </p>
+            </CardHeader>
+          </Card>
 
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-sm">Operating Status</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <p className="text-xs text-gray-600 mb-4">
-              Current operation status and availability configuration for the
-              practice.
-            </p>
-            <div className="space-y-2">
-              <div className="flex items-center justify-between p-2 bg-gray-50 rounded">
-                <span className="text-sm font-medium">Online Bookings</span>
-                <span className="text-xs font-semibold text-green-600 bg-green-50 px-2 py-1 rounded">
-                  Enabled
-                </span>
-              </div>
-              <div className="flex items-center justify-between p-2 bg-gray-50 rounded">
-                <span className="text-sm font-medium">Walk-in Bookings</span>
-                <span className="text-xs font-semibold text-green-600 bg-green-50 px-2 py-1 rounded">
-                  Enabled
-                </span>
-              </div>
-              <div className="flex items-center justify-between p-2 bg-gray-50 rounded">
-                <span className="text-sm font-medium">Medical Forms</span>
-                <span className="text-xs font-semibold text-green-600 bg-green-50 px-2 py-1 rounded">
-                  Active
-                </span>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-sm">Your Access Level</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <p className="text-xs text-gray-600 mb-4">
-              Your role determines what features you can access and manage.
-            </p>
-            <div className="space-y-2">
-              <div className="p-3 bg-amber-50 rounded border border-amber-200">
-                <p className="text-sm font-semibold text-gray-900 capitalize">
-                  {normalizeUserRole(currentUserRole)}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-sm">Service Configuration</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <p className="text-xs text-gray-600 mb-4">
+                  All available services are currently configured and enabled
+                  for patient bookings.
                 </p>
-                <p className="text-xs text-gray-500 mt-1">
-                  {canManageAvailability
-                    ? "Full access to practice management and availability settings"
-                    : "Limited access - view only mode"}
-                </p>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between p-2 bg-gray-50 rounded">
+                    <span className="text-sm">Dental Care</span>
+                    <span className="text-xs font-semibold text-green-600 bg-green-50 px-2 py-1 rounded">
+                      Active
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between p-2 bg-gray-50 rounded">
+                    <span className="text-sm">General Medicine</span>
+                    <span className="text-xs font-semibold text-green-600 bg-green-50 px-2 py-1 rounded">
+                      Active
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between p-2 bg-gray-50 rounded">
+                    <span className="text-sm">IV Drip Therapy</span>
+                    <span className="text-xs font-semibold text-green-600 bg-green-50 px-2 py-1 rounded">
+                      Active
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between p-2 bg-gray-50 rounded">
+                    <span className="text-sm">Physiotherapy</span>
+                    <span className="text-xs font-semibold text-green-600 bg-green-50 px-2 py-1 rounded">
+                      Active
+                    </span>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
 
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-sm">Need to Make Changes?</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <p className="text-xs text-gray-600 mb-4">
-              To modify system settings or manage availability, visit the
-              Practice section.
-            </p>
-            <div className="space-y-1 text-xs text-gray-600">
-              <p>✓ Go to Practice to manage services</p>
-              <p>✓ Go to Practice to set operating hours</p>
-              <p>✓ Go to Practice to manage doctor availability</p>
-            </div>
-          </CardContent>
-        </Card>
-      </div>
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-sm">Operating Status</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <p className="text-xs text-gray-600 mb-4">
+                  Current operation status and availability configuration for
+                  the practice.
+                </p>
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between p-2 bg-gray-50 rounded">
+                    <span className="text-sm font-medium">Online Bookings</span>
+                    <span className="text-xs font-semibold text-green-600 bg-green-50 px-2 py-1 rounded">
+                      Enabled
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between p-2 bg-gray-50 rounded">
+                    <span className="text-sm font-medium">
+                      Walk-in Bookings
+                    </span>
+                    <span className="text-xs font-semibold text-green-600 bg-green-50 px-2 py-1 rounded">
+                      Enabled
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between p-2 bg-gray-50 rounded">
+                    <span className="text-sm font-medium">Medical Forms</span>
+                    <span className="text-xs font-semibold text-green-600 bg-green-50 px-2 py-1 rounded">
+                      Active
+                    </span>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-sm">Your Access Level</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <p className="text-xs text-gray-600 mb-4">
+                  Your role determines what features you can access and manage.
+                </p>
+                <div className="space-y-2">
+                  <div className="p-3 bg-amber-50 rounded border border-amber-200">
+                    <p className="text-sm font-semibold text-gray-900 capitalize">
+                      {normalizeUserRole(currentUserRole)}
+                    </p>
+                    <p className="text-xs text-gray-500 mt-1">
+                      {canManageAvailability
+                        ? "Full access to practice management and availability settings"
+                        : "Limited access - view only mode"}
+                    </p>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-sm">Need to Make Changes?</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <p className="text-xs text-gray-600 mb-4">
+                  To modify system settings or manage availability, visit the
+                  Practice section.
+                </p>
+                <div className="space-y-1 text-xs text-gray-600">
+                  <p>✓ Go to Practice to manage services</p>
+                  <p>✓ Go to Practice to set operating hours</p>
+                  <p>✓ Go to Practice to manage doctor availability</p>
+                  {isSuperAdmin && (
+                    <p>✓ Use Settings to access activity and user management</p>
+                  )}
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+
+          {!isSuperAdmin && (
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-sm">Administration</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <p className="text-xs text-gray-600">
+                  Activity log and user management are visible to Super Admin
+                  only.
+                </p>
+              </CardContent>
+            </Card>
+          )}
+        </TabsContent>
+
+        {isSuperAdmin && (
+          <TabsContent value="activity" className="mt-4">
+            <ActivityContent />
+          </TabsContent>
+        )}
+
+        {isSuperAdmin && (
+          <TabsContent value="users" className="mt-4">
+            <UserManagementPanel
+              authToken={authToken}
+              currentUserId={currentUserId}
+              currentUserRole={currentUserRole}
+            />
+          </TabsContent>
+        )}
+      </Tabs>
     </div>
   );
 }
@@ -4951,9 +5684,13 @@ function DoctorAvailabilityPanel({
 function UserManagementContent({
   authToken,
   canManageUsers,
+  currentUserId,
+  currentUserRole,
 }: {
   authToken: string;
   canManageUsers: boolean;
+  currentUserId: number;
+  currentUserRole: UserRole;
 }) {
   return (
     <div className="space-y-6">
@@ -4969,7 +5706,11 @@ function UserManagementContent({
       </Card>
 
       {canManageUsers ? (
-        <UserManagementPanel authToken={authToken} />
+        <UserManagementPanel
+          authToken={authToken}
+          currentUserId={currentUserId}
+          currentUserRole={currentUserRole}
+        />
       ) : (
         <Card>
           <CardContent className="pt-6 text-sm text-gray-500">

@@ -31,6 +31,7 @@ import { toast } from "sonner";
 import {
   DEFAULT_AVAILABILITY_CONFIG,
   fetchAvailabilityConfig,
+  fetchServiceCatalog,
   getAvailableTimeSlots,
   isDateBookable,
   isPractitionerEnabled,
@@ -114,6 +115,7 @@ interface BookingCalendarProps {
   currentUserRole?: string;
   canConfirmBooking?: boolean;
   canCompleteBooking?: boolean;
+  canDeleteBooking?: boolean;
 }
 
 interface DoctorOption {
@@ -232,12 +234,14 @@ export function BookingCalendar({
   currentUserRole,
   canConfirmBooking = false,
   canCompleteBooking = false,
+  canDeleteBooking = false,
 }: BookingCalendarProps) {
   const [events, setEvents] = useState<BookingEvent[]>([]);
   const [loading, setLoading] = useState(true);
   const [availabilityConfig, setAvailabilityConfig] = useState(
     DEFAULT_AVAILABILITY_CONFIG,
   );
+  const [serviceCatalog, setServiceCatalog] = useState(SERVICE_CATALOG);
   const [selectedBooking, setSelectedBooking] = useState<BookingEvent | null>(
     null,
   );
@@ -250,6 +254,10 @@ export function BookingCalendar({
   const [confirmDoctorOptions, setConfirmDoctorOptions] = useState<
     DoctorOption[]
   >([]);
+  const [pendingAction, setPendingAction] = useState<
+    "unconfirm" | "delete" | null
+  >(null);
+  const [runningPendingAction, setRunningPendingAction] = useState(false);
   const [confirmDoctorId, setConfirmDoctorId] = useState("");
   const [loadingConfirmDoctors, setLoadingConfirmDoctors] = useState(false);
   const [showRescheduleForm, setShowRescheduleForm] = useState(false);
@@ -261,11 +269,11 @@ export function BookingCalendar({
   const [creatingBooking, setCreatingBooking] = useState(false);
   const [doctorOptions, setDoctorOptions] = useState<DoctorOption[]>([]);
   const [loadingDoctors, setLoadingDoctors] = useState(false);
-  const availableServices = SERVICE_CATALOG.filter((service) =>
+  const availableServices = serviceCatalog.filter((service) =>
     isServiceEnabled(availabilityConfig, service.id),
   );
   const availablePractitioners = (
-    SERVICE_CATALOG.find(
+    serviceCatalog.find(
       (service) => service.id === createBookingForm.serviceType,
     )?.practitioners || []
   ).filter((practitioner) =>
@@ -298,6 +306,14 @@ export function BookingCalendar({
     };
 
     loadAvailability();
+  }, []);
+
+  useEffect(() => {
+    const loadServiceCatalog = async () => {
+      setServiceCatalog(await fetchServiceCatalog());
+    };
+
+    void loadServiceCatalog();
   }, []);
 
   useEffect(() => {
@@ -916,7 +932,7 @@ export function BookingCalendar({
     }
   };
 
-  const handleUnconfirmBooking = async () => {
+  const executeUnconfirmBooking = async () => {
     if (!selectedBooking) return;
 
     if (!canConfirmBooking) {
@@ -924,18 +940,10 @@ export function BookingCalendar({
       return;
     }
 
-    const confirmed = window.confirm(
-      `Unconfirm booking for ${selectedBooking.first_name} ${selectedBooking.last_name}? This will move it back to pending and clear the assigned doctor.`,
-    );
-
-    if (!confirmed) {
-      return;
-    }
-
     try {
       if (!authToken) {
         toast.error("Missing authentication token");
-        return;
+        return false;
       }
 
       let lastResponse: Response | null = null;
@@ -960,22 +968,122 @@ export function BookingCalendar({
 
       if (!lastResponse) {
         toast.error("Failed to unconfirm booking");
-        return;
+        return false;
       }
 
       const data = await lastResponse.json();
       if (!lastResponse.ok || !data.success) {
         toast.error(data.error || "Failed to unconfirm booking");
-        return;
+        return false;
       }
 
       toast.success("Booking moved back to pending");
       setShowDetails(false);
       setSelectedBooking(null);
       fetchBookings();
+      return true;
     } catch (err) {
       console.error("Error:", err);
       toast.error("Failed to unconfirm booking");
+      return false;
+    }
+  };
+
+  const executeDeleteBooking = async () => {
+    if (!selectedBooking) return;
+
+    if (!canDeleteBooking) {
+      toast.error("You do not have permission to delete bookings");
+      return;
+    }
+
+    try {
+      if (!authToken) {
+        toast.error("Missing authentication token");
+        return false;
+      }
+
+      let lastResponse: Response | null = null;
+      for (const baseUrl of supabaseAdminApiBaseUrls) {
+        const response = await fetch(
+          `${baseUrl}/bookings/${selectedBooking.id}`,
+          {
+            method: "DELETE",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Basic ${authToken}`,
+            },
+          },
+        );
+
+        lastResponse = response;
+        if (response.status !== 404) {
+          break;
+        }
+      }
+
+      if (!lastResponse) {
+        toast.error("Failed to delete booking");
+        return false;
+      }
+
+      const data = await lastResponse.json();
+      if (!lastResponse.ok || !data.success) {
+        toast.error(data.error || "Failed to delete booking");
+        return false;
+      }
+
+      toast.success("Booking deleted");
+      setShowDetails(false);
+      setSelectedBooking(null);
+      fetchBookings();
+      return true;
+    } catch (err) {
+      console.error("Error:", err);
+      toast.error("Failed to delete booking");
+      return false;
+    }
+  };
+
+  const handleUnconfirmBooking = () => {
+    if (!selectedBooking) return;
+
+    if (!canConfirmBooking) {
+      toast.error("You do not have permission to unconfirm bookings");
+      return;
+    }
+
+    setPendingAction("unconfirm");
+  };
+
+  const handleDeleteBooking = () => {
+    if (!selectedBooking) return;
+
+    if (!canDeleteBooking) {
+      toast.error("You do not have permission to delete bookings");
+      return;
+    }
+
+    setPendingAction("delete");
+  };
+
+  const handleConfirmPendingAction = async () => {
+    if (!selectedBooking || !pendingAction) {
+      return;
+    }
+
+    setRunningPendingAction(true);
+    try {
+      const succeeded =
+        pendingAction === "unconfirm"
+          ? await executeUnconfirmBooking()
+          : await executeDeleteBooking();
+
+      if (succeeded) {
+        setPendingAction(null);
+      }
+    } finally {
+      setRunningPendingAction(false);
     }
   };
 
@@ -1705,6 +1813,15 @@ export function BookingCalendar({
                 >
                   Close
                 </Button>
+                {canDeleteBooking && (
+                  <Button
+                    variant="outline"
+                    className="w-full text-red-600 border-red-600 hover:bg-red-50"
+                    onClick={handleDeleteBooking}
+                  >
+                    Delete Booking
+                  </Button>
+                )}
               </div>
 
               {showRescheduleForm && (
@@ -1829,6 +1946,55 @@ export function BookingCalendar({
               className="bg-green-600 hover:bg-green-700"
             >
               Confirm Booking
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={pendingAction !== null}
+        onOpenChange={(open) => {
+          if (!open && !runningPendingAction) {
+            setPendingAction(null);
+          }
+        }}
+      >
+        <DialogContent className="w-[calc(100vw-1rem)] sm:w-[92vw] max-w-md">
+          <DialogHeader>
+            <DialogTitle>
+              {pendingAction === "delete"
+                ? "Delete Booking"
+                : "Unconfirm Booking"}
+            </DialogTitle>
+            <DialogDescription>
+              {pendingAction === "delete"
+                ? `Delete booking for ${selectedBooking?.first_name || "this patient"} ${selectedBooking?.last_name || ""}? This action cannot be undone.`
+                : `Move booking for ${selectedBooking?.first_name || "this patient"} ${selectedBooking?.last_name || ""} back to pending and clear the assigned doctor?`}
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="flex flex-col-reverse sm:flex-row sm:justify-end gap-2 pt-2">
+            <Button
+              variant="outline"
+              onClick={() => setPendingAction(null)}
+              disabled={runningPendingAction}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={() => void handleConfirmPendingAction()}
+              disabled={runningPendingAction}
+              className={
+                pendingAction === "delete"
+                  ? "bg-red-600 hover:bg-red-700 text-white"
+                  : "bg-amber-600 hover:bg-amber-700 text-white"
+              }
+            >
+              {runningPendingAction
+                ? "Please wait..."
+                : pendingAction === "delete"
+                  ? "Delete Booking"
+                  : "Unconfirm Booking"}
             </Button>
           </div>
         </DialogContent>
