@@ -11,10 +11,17 @@ import {
 import { Input } from "./ui/input";
 import { Label } from "./ui/label";
 
+export interface MedicalIntakeSubmitResult {
+  downloadUrl?: string;
+  fileName?: string;
+}
+
 interface MedicalIntakeFormProps {
   patientId?: string;
   initialData?: Partial<MedicalIntakeData>;
-  onSubmit?: (data: MedicalIntakeData) => Promise<void>;
+  onSubmit?: (
+    data: MedicalIntakeData,
+  ) => Promise<MedicalIntakeSubmitResult | void>;
   onCancel?: () => void;
 }
 
@@ -159,12 +166,14 @@ const MedicalIntakeForm: React.FC<MedicalIntakeFormProps> = ({
   onCancel,
 }) => {
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [consentAccepted, setConsentAccepted] = useState(false);
   const [formData, setFormData] = useState<MedicalIntakeData>(() =>
     createFormState(initialData),
   );
 
   useEffect(() => {
     setFormData(createFormState(initialData));
+    setConsentAccepted(false);
   }, [initialData]);
 
   const label = useMemo(
@@ -224,13 +233,25 @@ const MedicalIntakeForm: React.FC<MedicalIntakeFormProps> = ({
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    if (
-      !formData.patient_surname ||
-      !formData.patient_first_name ||
-      !formData.patient_cell
-    ) {
+    if (!consentAccepted) {
+      toast.error("Please accept the disclosure before submitting");
+      return;
+    }
+
+    const missingFields: string[] = [];
+    if (!formData.patient_surname) missingFields.push("patient surname");
+    if (!formData.patient_first_name) missingFields.push("patient first name");
+    if (!formData.patient_cell) missingFields.push("patient cell number");
+    if (!formData.patient_date_of_birth) missingFields.push("date of birth");
+    if (!formData.patient_id_number) missingFields.push("ID number");
+    if (!formData.nearest_name) missingFields.push("nearest contact name");
+    if (!formData.nearest_cell) missingFields.push("nearest contact cell");
+    if (!formData.patient_signature) missingFields.push("patient signature");
+    if (!formData.signature_date) missingFields.push("signature date");
+
+    if (missingFields.length > 0) {
       toast.error(
-        "Please complete patient surname, first name and cell number",
+        `Please complete required fields: ${missingFields.slice(0, 4).join(", ")}${missingFields.length > 4 ? "..." : ""}`,
       );
       return;
     }
@@ -298,12 +319,14 @@ const MedicalIntakeForm: React.FC<MedicalIntakeFormProps> = ({
                   type="date"
                   value={formData.patient_date_of_birth}
                   onChange={handleChange}
+                  required
                 />
                 <Field
                   name="patient_id_number"
                   text="I.D Number / I.D Nommer"
                   value={formData.patient_id_number}
                   onChange={handleChange}
+                  required
                 />
                 <Field
                   name="patient_occupation"
@@ -509,6 +532,7 @@ const MedicalIntakeForm: React.FC<MedicalIntakeFormProps> = ({
                   text="Name / Naam"
                   value={formData.nearest_name}
                   onChange={handleChange}
+                  required
                 />
                 <Field
                   name="nearest_relationship"
@@ -546,6 +570,7 @@ const MedicalIntakeForm: React.FC<MedicalIntakeFormProps> = ({
                   text="Cell / Selfoon"
                   value={formData.nearest_cell}
                   onChange={handleChange}
+                  required
                 />
               </div>
             </section>
@@ -647,6 +672,7 @@ const MedicalIntakeForm: React.FC<MedicalIntakeFormProps> = ({
                   text="Patient Signature (Type full name) / Pasient Handtekening"
                   value={formData.patient_signature}
                   onChange={handleChange}
+                  required
                 />
                 <Field
                   name="signature_date"
@@ -654,7 +680,28 @@ const MedicalIntakeForm: React.FC<MedicalIntakeFormProps> = ({
                   type="date"
                   value={formData.signature_date}
                   onChange={handleChange}
+                  required
                 />
+              </div>
+            </section>
+
+            <section className="space-y-3 rounded-md border border-amber-200 bg-amber-50 p-3">
+              <div className="flex items-start gap-2">
+                <input
+                  id="medical-disclosure"
+                  type="checkbox"
+                  checked={consentAccepted}
+                  onChange={(event) => setConsentAccepted(event.target.checked)}
+                  className="mt-1"
+                />
+                <Label
+                  htmlFor="medical-disclosure"
+                  className="text-sm leading-5"
+                >
+                  I confirm that the information provided is accurate, and I
+                  consent to DentalX storing and using this information for
+                  treatment, billing, and record-keeping purposes.
+                </Label>
               </div>
             </section>
 
@@ -701,18 +748,20 @@ function Field({
 }: FieldProps) {
   return (
     <div className={className}>
-      <Label htmlFor={name}>
-        {text}
-        {required ? <span className="text-red-500">*</span> : null}
-      </Label>
-      <Input
-        id={name}
-        name={name}
-        type={type}
-        value={value}
-        onChange={onChange}
-        required={required}
-      />
+      <div className="space-y-1.5">
+        <Label htmlFor={name}>
+          {text}
+          {required ? <span className="text-red-500">*</span> : null}
+        </Label>
+        <Input
+          id={name}
+          name={name}
+          type={type}
+          value={value}
+          onChange={onChange}
+          required={required}
+        />
+      </div>
     </div>
   );
 }

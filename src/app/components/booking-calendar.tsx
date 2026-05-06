@@ -115,7 +115,6 @@ interface BookingCalendarProps {
   currentUserRole?: string;
   canConfirmBooking?: boolean;
   canCompleteBooking?: boolean;
-  canDeleteBooking?: boolean;
 }
 
 interface DoctorOption {
@@ -234,7 +233,6 @@ export function BookingCalendar({
   currentUserRole,
   canConfirmBooking = false,
   canCompleteBooking = false,
-  canDeleteBooking = false,
 }: BookingCalendarProps) {
   const [events, setEvents] = useState<BookingEvent[]>([]);
   const [loading, setLoading] = useState(true);
@@ -255,8 +253,9 @@ export function BookingCalendar({
     DoctorOption[]
   >([]);
   const [pendingAction, setPendingAction] = useState<
-    "unconfirm" | "delete" | null
+    "unconfirm" | "cancel" | null
   >(null);
+  const [calendarCancelReason, setCalendarCancelReason] = useState("");
   const [runningPendingAction, setRunningPendingAction] = useState(false);
   const [confirmDoctorId, setConfirmDoctorId] = useState("");
   const [loadingConfirmDoctors, setLoadingConfirmDoctors] = useState(false);
@@ -447,11 +446,6 @@ export function BookingCalendar({
   };
 
   const handleSelectEvent = (event: BookingEvent) => {
-    if (event.status === "cancelled") {
-      openCreateDialog(getDatePart(event.date_str), event.time_str);
-      return;
-    }
-
     setSelectedBooking(event);
     setRescheduleDate(getDatePart(event.date_str));
     setRescheduleTime(event.time_str);
@@ -1075,58 +1069,34 @@ export function BookingCalendar({
     }
   };
 
-  const executeDeleteBooking = async () => {
-    if (!selectedBooking) return;
-
-    if (!canDeleteBooking) {
-      toast.error("You do not have permission to delete bookings");
-      return;
-    }
+  const executeCancelBooking = async () => {
+    if (!selectedBooking) return false;
 
     try {
-      if (!authToken) {
-        toast.error("Missing authentication token");
+      const { error: updateError } = await supabase
+        .from("bookings")
+        .update({
+          status: "cancelled",
+          cancellation_reason: calendarCancelReason || null,
+          cancelled_at: new Date().toISOString(),
+        })
+        .eq("id", selectedBooking.id);
+
+      if (updateError) {
+        toast.error("Failed to cancel booking");
+        console.error(updateError);
         return false;
       }
 
-      let lastResponse: Response | null = null;
-      for (const baseUrl of supabaseAdminApiBaseUrls) {
-        const response = await fetch(
-          `${baseUrl}/bookings/${selectedBooking.id}`,
-          {
-            method: "DELETE",
-            headers: {
-              "Content-Type": "application/json",
-              Authorization: `Basic ${authToken}`,
-            },
-          },
-        );
-
-        lastResponse = response;
-        if (response.status !== 404) {
-          break;
-        }
-      }
-
-      if (!lastResponse) {
-        toast.error("Failed to delete booking");
-        return false;
-      }
-
-      const data = await lastResponse.json();
-      if (!lastResponse.ok || !data.success) {
-        toast.error(data.error || "Failed to delete booking");
-        return false;
-      }
-
-      toast.success("Booking deleted");
+      toast.success("Booking cancelled");
       setShowDetails(false);
       setSelectedBooking(null);
+      setCalendarCancelReason("");
       fetchBookings();
       return true;
     } catch (err) {
       console.error("Error:", err);
-      toast.error("Failed to delete booking");
+      toast.error("Failed to cancel booking");
       return false;
     }
   };
@@ -1142,15 +1112,16 @@ export function BookingCalendar({
     setPendingAction("unconfirm");
   };
 
-  const handleDeleteBooking = () => {
+  const handleCancelBooking = () => {
     if (!selectedBooking) return;
 
-    if (!canDeleteBooking) {
-      toast.error("You do not have permission to delete bookings");
+    if (selectedBooking.status !== "confirmed") {
+      toast.error("Only confirmed bookings can be cancelled");
       return;
     }
 
-    setPendingAction("delete");
+    setCalendarCancelReason("");
+    setPendingAction("cancel");
   };
 
   const handleConfirmPendingAction = async () => {
@@ -1163,7 +1134,7 @@ export function BookingCalendar({
       const succeeded =
         pendingAction === "unconfirm"
           ? await executeUnconfirmBooking()
-          : await executeDeleteBooking();
+          : await executeCancelBooking();
 
       if (succeeded) {
         setPendingAction(null);
@@ -1905,13 +1876,13 @@ export function BookingCalendar({
                 >
                   Close
                 </Button>
-                {canDeleteBooking && (
+                {selectedBooking?.status === "confirmed" && (
                   <Button
                     variant="outline"
                     className="w-full text-red-600 border-red-600 hover:bg-red-50"
-                    onClick={handleDeleteBooking}
+                    onClick={handleCancelBooking}
                   >
-                    Delete Booking
+                    Cancel Booking
                   </Button>
                 )}
               </div>
@@ -2054,38 +2025,55 @@ export function BookingCalendar({
         <DialogContent className="w-[calc(100vw-1rem)] sm:w-[92vw] max-w-md">
           <DialogHeader>
             <DialogTitle>
-              {pendingAction === "delete"
-                ? "Delete Booking"
+              {pendingAction === "cancel"
+                ? "Cancel Booking"
                 : "Unconfirm Booking"}
             </DialogTitle>
             <DialogDescription>
-              {pendingAction === "delete"
-                ? `Delete booking for ${selectedBooking?.first_name || "this patient"} ${selectedBooking?.last_name || ""}? This action cannot be undone.`
+              {pendingAction === "cancel"
+                ? `Cancel the confirmed booking for ${selectedBooking?.first_name || "this patient"} ${selectedBooking?.last_name || ""}?`
                 : `Move booking for ${selectedBooking?.first_name || "this patient"} ${selectedBooking?.last_name || ""} back to pending and clear the assigned doctor?`}
             </DialogDescription>
           </DialogHeader>
 
+          {pendingAction === "cancel" && (
+            <div className="py-2">
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Cancellation Reason (optional)
+              </label>
+              <textarea
+                value={calendarCancelReason}
+                onChange={(e) => setCalendarCancelReason(e.target.value)}
+                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#9A7B1D] text-sm"
+                rows={3}
+                placeholder="Reason for cancellation..."
+              />
+            </div>
+          )}
           <div className="flex flex-col-reverse sm:flex-row sm:justify-end gap-2 pt-2">
             <Button
               variant="outline"
-              onClick={() => setPendingAction(null)}
+              onClick={() => {
+                setPendingAction(null);
+                setCalendarCancelReason("");
+              }}
               disabled={runningPendingAction}
             >
-              Cancel
+              Close
             </Button>
             <Button
               onClick={() => void handleConfirmPendingAction()}
               disabled={runningPendingAction}
               className={
-                pendingAction === "delete"
+                pendingAction === "cancel"
                   ? "bg-red-600 hover:bg-red-700 text-white"
                   : "bg-amber-600 hover:bg-amber-700 text-white"
               }
             >
               {runningPendingAction
                 ? "Please wait..."
-                : pendingAction === "delete"
-                  ? "Delete Booking"
+                : pendingAction === "cancel"
+                  ? "Cancel Booking"
                   : "Unconfirm Booking"}
             </Button>
           </div>

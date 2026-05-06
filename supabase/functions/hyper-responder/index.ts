@@ -2387,35 +2387,37 @@ app.post("/make-server-34100c2d/medical-intake", async (c) => {
     const formData = await c.req.json();
     const bookingId = formData.booking_id;
 
-    if (!bookingId) {
-      return c.json({ error: "Booking ID is required" }, 400);
-    }
-
     const supabase = getSupabaseClient();
 
-    // Verify booking exists
-    const { data: booking, error: bookingError } = await supabase
-      .from("bookings")
-      .select(
-        "id, first_name, last_name, phone, id_number, email, medical_aid, medical_aid_number",
-      )
-      .eq("id", bookingId)
-      .maybeSingle();
+    let booking: any = null;
 
-    if (bookingError) {
-      throw bookingError;
-    }
+    // If bookingId is provided, verify booking exists
+    if (bookingId) {
+      const { data: fetchedBooking, error: bookingError } = await supabase
+        .from("bookings")
+        .select(
+          "id, first_name, last_name, phone, id_number, email, medical_aid, medical_aid_number",
+        )
+        .eq("id", bookingId)
+        .maybeSingle();
 
-    if (!booking) {
-      return c.json({ error: "Booking not found" }, 404);
+      if (bookingError) {
+        throw bookingError;
+      }
+
+      if (!fetchedBooking) {
+        return c.json({ error: "Booking not found" }, 404);
+      }
+
+      booking = fetchedBooking;
     }
 
     // Try to find existing patient by id_number, then strict full-name + phone
     let patientId: string | null = null;
-    const idNumber = formData.patient_id_number || booking.id_number;
-    const phone = formData.patient_cell || booking.phone;
-    const firstName = formData.patient_first_name || booking.first_name;
-    const lastName = formData.patient_surname || booking.last_name;
+    const idNumber = formData.patient_id_number || booking?.id_number;
+    const phone = formData.patient_cell || booking?.phone;
+    const firstName = formData.patient_first_name || booking?.first_name;
+    const lastName = formData.patient_surname || booking?.last_name;
 
     // Search by id_number first (most reliable)
     if (idNumber) {
@@ -2465,10 +2467,11 @@ app.post("/make-server-34100c2d/medical-intake", async (c) => {
           last_name: lastName,
           phone: phone,
           id_number: idNumber || null,
-          email: formData.patient_email || booking.email || null,
-          medical_aid: formData.medical_aid_name || booking.medical_aid || null,
+          email: formData.patient_email || booking?.email || null,
+          medical_aid:
+            formData.medical_aid_name || booking?.medical_aid || null,
           medical_aid_number:
-            formData.medical_aid_number || booking.medical_aid_number || null,
+            formData.medical_aid_number || booking?.medical_aid_number || null,
           date_of_birth: formData.patient_date_of_birth || null,
           address: formData.patient_address || null,
         })
@@ -2487,21 +2490,21 @@ app.post("/make-server-34100c2d/medical-intake", async (c) => {
       .from("medical_intake")
       .insert({
         patient_id: patientId,
-        booking_id: bookingId,
+        booking_id: bookingId || null,
         account_number: formData.account_number || null,
         first_name: firstName || null,
         last_name: lastName || null,
         date_of_birth: formData.patient_date_of_birth || null,
         id_number: idNumber || null,
         phone: phone || null,
-        email: formData.patient_email || booking.email || null,
+        email: formData.patient_email || booking?.email || null,
         responsible_name:
           `${formData.responsible_first_name || ""} ${formData.responsible_surname || ""}`.trim() ||
           null,
         responsible_phone: formData.responsible_cell || null,
-        medical_aid: formData.medical_aid_name || booking.medical_aid || null,
+        medical_aid: formData.medical_aid_name || booking?.medical_aid || null,
         medical_aid_number:
-          formData.medical_aid_number || booking.medical_aid_number || null,
+          formData.medical_aid_number || booking?.medical_aid_number || null,
         emergency_contact_name: formData.nearest_name || null,
         emergency_contact_relationship: formData.nearest_relationship || null,
         emergency_contact_phone: formData.nearest_cell || null,
@@ -2534,7 +2537,14 @@ app.post("/make-server-34100c2d/medical-intake", async (c) => {
     const brandingConfig = await getBrandingConfig(supabase);
     const pdfBytes = await generateMedicalIntakePdf(
       formData,
-      booking,
+      booking || {
+        first_name: firstName,
+        last_name: lastName,
+        phone: phone,
+        email: formData.patient_email,
+        medical_aid: formData.medical_aid_name,
+        medical_aid_number: formData.medical_aid_number,
+      },
       brandingConfig,
     );
 
@@ -2547,6 +2557,15 @@ app.post("/make-server-34100c2d/medical-intake", async (c) => {
 
     if (uploadError) {
       throw uploadError;
+    }
+
+    const { data: signedUrlData, error: signedUrlError } =
+      await supabase.storage
+        .from("patient-files")
+        .createSignedUrl(filePath, 60 * 60);
+
+    if (signedUrlError) {
+      console.error("Failed to create signed download URL:", signedUrlError);
     }
 
     const { error: documentError } = await supabase
@@ -2602,6 +2621,7 @@ app.post("/make-server-34100c2d/medical-intake", async (c) => {
         fileName,
         filePath,
         bucket: "patient-files",
+        downloadUrl: signedUrlData?.signedUrl || null,
       },
     });
   } catch (error) {

@@ -254,7 +254,6 @@ export function AdminDashboard({
               currentUserRole={normalizedRole}
               canConfirmBooking={permissions.bookingsConfirm}
               canCompleteBooking={permissions.bookingsComplete}
-              canDeleteBooking={permissions.bookingsDelete}
             />
           )}
           {activeSection === "bookings" && (
@@ -1810,14 +1809,16 @@ function BookingsContent({
                     >
                       Reschedule
                     </Button>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      className="text-red-600 border-red-600 hover:bg-red-50 text-xs sm:text-sm"
-                      onClick={() => handleCancelClick(booking)}
-                    >
-                      Cancel
-                    </Button>
+                    {booking.status === "confirmed" && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="text-red-600 border-red-600 hover:bg-red-50 text-xs sm:text-sm"
+                        onClick={() => handleCancelClick(booking)}
+                      >
+                        Cancel
+                      </Button>
+                    )}
                   </div>
                 </div>
               ))}

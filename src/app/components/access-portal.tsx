@@ -47,6 +47,7 @@ type PortalScreen =
   | "walkin-type"
   | "online-checkin"
   | "medical-form-search"
+  | "medical-form-new"
   | "medical-intake"
   | "returning-search"
   | "returning-service"
@@ -65,6 +66,7 @@ type MedicalFormOrigin =
 type MedicalIntakeOrigin =
   | "online-checkin"
   | "medical-form-search"
+  | "medical-form-new"
   | "walkin-type";
 
 interface AccessPortalProps {
@@ -197,6 +199,8 @@ function AccessPortalContent({ onClose, onLoginSuccess }: AccessPortalProps) {
   const [medicalIntakeContext, setMedicalIntakeContext] =
     useState<MedicalIntakeContextData | null>(null);
   const [useFreshMedicalFile, setUseFreshMedicalFile] = useState(false);
+  const [existingPdfUrl, setExistingPdfUrl] = useState<string | null>(null);
+  const [loadingPdfUrl, setLoadingPdfUrl] = useState(false);
 
   const [searchTerm, setSearchTerm] = useState("");
   const [searching, setSearching] = useState(false);
@@ -983,7 +987,25 @@ function AccessPortalContent({ onClose, onLoginSuccess }: AccessPortalProps) {
       throw new Error("No response from medical intake endpoint");
     }
 
-    await parseApiResponse(response, "Medical intake endpoint");
+    const data = await parseApiResponse(response, "Medical intake endpoint");
+    const downloadUrl = data?.intakeDocument?.downloadUrl;
+    const fileName = data?.intakeDocument?.fileName || "medical-intake.pdf";
+
+    if (downloadUrl) {
+      const link = document.createElement("a");
+      link.href = downloadUrl;
+      link.download = fileName;
+      link.target = "_blank";
+      link.rel = "noopener noreferrer";
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      toast.success("Medical form PDF download started");
+    } else {
+      toast.info(
+        "Medical form saved. PDF download link is unavailable right now.",
+      );
+    }
 
     setMedicalIntakeContext(null);
     setUseFreshMedicalFile(false);
@@ -1091,6 +1113,46 @@ function AccessPortalContent({ onClose, onLoginSuccess }: AccessPortalProps) {
     }
   };
 
+  const handleMedicalIntakeSubmitNew = async (formData: MedicalIntakeData) => {
+    const response = await apiFetchPublic(`/medical-intake`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        ...formData,
+        booking_id: null,
+      }),
+    });
+
+    if (!response) {
+      throw new Error("No response from medical intake endpoint");
+    }
+
+    const data = await parseApiResponse(response, "Medical intake endpoint");
+    const downloadUrl = data?.intakeDocument?.downloadUrl;
+    const fileName = data?.intakeDocument?.fileName || "medical-intake.pdf";
+
+    if (downloadUrl) {
+      const link = document.createElement("a");
+      link.href = downloadUrl;
+      link.download = fileName;
+      link.target = "_blank";
+      link.rel = "noopener noreferrer";
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      toast.success("Medical form PDF download started");
+    } else {
+      toast.info(
+        "Medical form saved. PDF download link is unavailable right now.",
+      );
+    }
+
+    setFormLookupQuery("");
+    setScreen("medical-form-search");
+  };
+
   const renderTopBar = () => (
     <div className="bg-white border-b border-gray-200 sticky top-0 z-40">
       <div className="max-w-6xl mx-auto px-4 sm:px-6 py-3 flex items-center justify-between">
@@ -1112,6 +1174,11 @@ function AccessPortalContent({ onClose, onLoginSuccess }: AccessPortalProps) {
 
             if (screen === "medical-form-search") {
               setScreen(medicalFormOrigin);
+              return;
+            }
+
+            if (screen === "medical-form-new") {
+              setScreen("medical-form-search");
               return;
             }
 
@@ -1556,6 +1623,19 @@ function AccessPortalContent({ onClose, onLoginSuccess }: AccessPortalProps) {
                   ? "Checking booking..."
                   : "Fill Medical Form"}
               </Button>
+
+              <Button
+                onClick={() => {
+                  setMedicalIntakeContext(null);
+                  setMedicalFormOrigin("walkin-type");
+                  setMedicalIntakeOrigin("medical-form-new");
+                  setScreen("medical-form-new");
+                }}
+                variant="outline"
+                className="w-full border-[#9A7B1D] text-[#9A7B1D] hover:bg-amber-50"
+              >
+                I Need A New Form
+              </Button>
             </div>
           </div>
         </div>
@@ -1617,8 +1697,8 @@ function AccessPortalContent({ onClose, onLoginSuccess }: AccessPortalProps) {
 
           {medicalIntakeContext.previousForm ? (
             <div className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-900">
-              <p className="font-semibold mb-1">Previous Medical Form Found</p>
-              <p>
+              <p className="font-semibold mb-2">Previous Medical Form Found</p>
+              <p className="text-xs text-blue-700 mb-3">
                 Last submitted:{" "}
                 {medicalIntakeContext.previousForm.created_at
                   ? (() => {
@@ -1635,30 +1715,75 @@ function AccessPortalContent({ onClose, onLoginSuccess }: AccessPortalProps) {
                     })()
                   : "Unknown"}
               </p>
-              <div className="mt-3 flex flex-wrap gap-2">
+              <div className="flex flex-wrap gap-2">
                 <Button
                   type="button"
-                  variant={useFreshMedicalFile ? "outline" : "default"}
-                  className={
-                    useFreshMedicalFile
-                      ? ""
-                      : "bg-[#9A7B1D] hover:bg-[#7d6418] text-white"
-                  }
-                  onClick={() => setUseFreshMedicalFile(false)}
+                  variant="outline"
+                  className="border-blue-600 text-blue-700 hover:bg-blue-100 text-sm"
+                  disabled={loadingPdfUrl}
+                  onClick={async () => {
+                    if (existingPdfUrl) {
+                      window.open(
+                        existingPdfUrl,
+                        "_blank",
+                        "noopener,noreferrer",
+                      );
+                      return;
+                    }
+                    setLoadingPdfUrl(true);
+                    try {
+                      const medicalIntakeId =
+                        medicalIntakeContext.previousForm?.id;
+                      if (!medicalIntakeId) {
+                        toast.error("No form ID found");
+                        return;
+                      }
+                      const { data: subData } = await supabase
+                        .from("medical_form_submissions")
+                        .select("file_path, storage_bucket")
+                        .eq("medical_intake_id", medicalIntakeId)
+                        .order("created_at", { ascending: false })
+                        .limit(1)
+                        .maybeSingle();
+                      if (!subData?.file_path) {
+                        toast.error("No PDF file found for this form");
+                        return;
+                      }
+                      const bucket = subData.storage_bucket || "patient-files";
+                      const { data: signed, error: signedErr } =
+                        await supabase.storage
+                          .from(bucket)
+                          .createSignedUrl(subData.file_path, 300);
+                      if (signedErr || !signed?.signedUrl) {
+                        toast.error("Could not load PDF");
+                        return;
+                      }
+                      setExistingPdfUrl(signed.signedUrl);
+                      window.open(
+                        signed.signedUrl,
+                        "_blank",
+                        "noopener,noreferrer",
+                      );
+                    } catch (err) {
+                      console.error(err);
+                      toast.error("Failed to load PDF");
+                    } finally {
+                      setLoadingPdfUrl(false);
+                    }
+                  }}
                 >
-                  View Existing File
+                  {loadingPdfUrl ? "Loading PDF..." : "View Existing PDF"}
                 </Button>
                 <Button
                   type="button"
-                  variant={useFreshMedicalFile ? "default" : "outline"}
-                  className={
-                    useFreshMedicalFile
-                      ? "bg-[#9A7B1D] hover:bg-[#7d6418] text-white"
-                      : ""
-                  }
-                  onClick={() => setUseFreshMedicalFile(true)}
+                  variant="outline"
+                  className="border-amber-600 text-amber-700 hover:bg-amber-50 text-sm"
+                  onClick={() => {
+                    setUseFreshMedicalFile(true);
+                    setExistingPdfUrl(null);
+                  }}
                 >
-                  I Need A New File
+                  Fill New Form
                 </Button>
               </div>
             </div>
@@ -1676,19 +1801,39 @@ function AccessPortalContent({ onClose, onLoginSuccess }: AccessPortalProps) {
             </div>
           )}
 
+          {(!medicalIntakeContext.previousForm || useFreshMedicalFile) && (
+            <MedicalIntakeForm
+              key={`${medicalIntakeContext.bookingId}-${useFreshMedicalFile ? "fresh" : "existing"}`}
+              initialData={
+                useFreshMedicalFile
+                  ? medicalIntakeContext.bookingInitialData ||
+                    medicalIntakeContext.initialData
+                  : medicalIntakeContext.previousForm?.form_payload ||
+                    medicalIntakeContext.initialData
+              }
+              onSubmit={handleMedicalIntakeSubmit}
+              onCancel={() => {
+                setMedicalIntakeContext(null);
+                setUseFreshMedicalFile(false);
+                setExistingPdfUrl(null);
+                setScreen(medicalIntakeOrigin);
+              }}
+            />
+          )}
+        </div>
+      )}
+
+      {screen === "medical-form-new" && (
+        <div className="max-w-6xl mx-auto px-4 sm:px-6 py-8 space-y-4">
+          <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+            Creating new medical file
+          </div>
+
           <MedicalIntakeForm
-            key={`${medicalIntakeContext.bookingId}-${useFreshMedicalFile ? "fresh" : "existing"}`}
-            initialData={
-              useFreshMedicalFile
-                ? medicalIntakeContext.bookingInitialData ||
-                  medicalIntakeContext.initialData
-                : medicalIntakeContext.initialData
-            }
-            onSubmit={handleMedicalIntakeSubmit}
+            initialData={{}}
+            onSubmit={handleMedicalIntakeSubmitNew}
             onCancel={() => {
-              setMedicalIntakeContext(null);
-              setUseFreshMedicalFile(false);
-              setScreen(medicalIntakeOrigin);
+              setScreen("medical-form-search");
             }}
           />
         </div>
