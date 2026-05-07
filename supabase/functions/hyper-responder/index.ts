@@ -512,6 +512,16 @@ const getEligibleDoctorsForServiceAndSlot = async (
     bookingTime: string;
   },
 ) => {
+  const normalizedServiceType = normalizeServiceTypeValue(serviceType);
+  if (!normalizedServiceType) {
+    return [];
+  }
+
+  const availabilityConfig = await fetchAvailabilityConfigFromDb(supabase);
+  if (availabilityConfig.services?.[normalizedServiceType]?.enabled === false) {
+    return [];
+  }
+
   const { data: doctors, error: doctorsError } = await supabase
     .from("admin_users")
     .select("id, username")
@@ -537,7 +547,7 @@ const getEligibleDoctorsForServiceAndSlot = async (
   const { data: doctorServiceRows, error: doctorServiceError } = await supabase
     .from("doctor_service_assignments")
     .select("doctor_id")
-    .eq("service_type", serviceType)
+    .eq("service_type", normalizedServiceType)
     .in("doctor_id", doctorIdList);
 
   if (doctorServiceError) {

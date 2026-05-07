@@ -1249,7 +1249,7 @@ function BookingsContent({
 
     try {
       const res = await apiFetchAuth(
-        `/available-doctors?date=${encodeURIComponent(booking.date || "")}&time=${encodeURIComponent(booking.time || "")}`,
+        `/available-doctors?date=${encodeURIComponent(booking.date || "")}&time=${encodeURIComponent(booking.time || "")}&serviceType=${encodeURIComponent(booking.service_type || "")}`,
       );
       if (res && res.ok) {
         const json = await res.json();
@@ -4375,6 +4375,8 @@ function UserManagementPanel({
   const [supportedServiceTypes, setSupportedServiceTypes] = useState<
     Array<{ service_type: string; label: string }>
   >([]);
+  const [doctorServiceCatalog, setDoctorServiceCatalog] =
+    useState(SERVICE_CATALOG);
   const [loadingUsers, setLoadingUsers] = useState(true);
   const [loadingServiceTypes, setLoadingServiceTypes] = useState(true);
   const [savingUserId, setSavingUserId] = useState<number | null>(null);
@@ -4401,16 +4403,23 @@ function UserManagementPanel({
     doctorServices: [] as string[],
   });
 
-  const doctorServiceOptions =
-    supportedServiceTypes.length > 0
-      ? supportedServiceTypes.map((serviceType) => ({
-          value: serviceType.service_type,
-          label: serviceType.label,
-        }))
-      : SERVICE_CATALOG.map((service) => ({
-          value: service.id,
-          label: service.title,
-        }));
+  const doctorServiceOptionMap = new Map<string, string>();
+
+  for (const service of SERVICE_CATALOG) {
+    doctorServiceOptionMap.set(service.id, service.title);
+  }
+
+  for (const service of doctorServiceCatalog) {
+    doctorServiceOptionMap.set(service.id, service.title);
+  }
+
+  for (const serviceType of supportedServiceTypes) {
+    doctorServiceOptionMap.set(serviceType.service_type, serviceType.label);
+  }
+
+  const doctorServiceOptions = Array.from(doctorServiceOptionMap.entries())
+    .map(([value, label]) => ({ value, label }))
+    .sort((a, b) => a.label.localeCompare(b.label));
 
   const doctorServiceLabelByValue = new Map(
     doctorServiceOptions.map((serviceOption) => [
@@ -4532,6 +4541,14 @@ function UserManagementPanel({
     }
   };
 
+  const loadDoctorServiceCatalog = async () => {
+    try {
+      setDoctorServiceCatalog(await fetchServiceCatalog());
+    } catch (error) {
+      console.error("Failed to load doctor service catalog:", error);
+    }
+  };
+
   const loadRoles = async () => {
     try {
       const response = await apiFetchAuth(`/roles`);
@@ -4606,6 +4623,7 @@ function UserManagementPanel({
     loadUsers();
     loadRoles();
     loadSupportedServiceTypes();
+    loadDoctorServiceCatalog();
   }, []);
 
   const handleCreateServiceType = async () => {

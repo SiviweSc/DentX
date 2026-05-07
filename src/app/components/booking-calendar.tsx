@@ -847,7 +847,7 @@ export function BookingCalendar({
       let lastResponse: Response | null = null;
       for (const baseUrl of supabaseAdminApiBaseUrls) {
         const response = await fetch(
-          `${baseUrl}/available-doctors?date=${encodeURIComponent(selectedBooking.date_str || "")}&time=${encodeURIComponent(selectedBooking.time_str || "")}`,
+          `${baseUrl}/available-doctors?date=${encodeURIComponent(selectedBooking.date_str || "")}&time=${encodeURIComponent(selectedBooking.time_str || "")}&serviceType=${encodeURIComponent(selectedBooking.service_type || "")}`,
           {
             headers: {
               Authorization: `Basic ${authToken}`,
