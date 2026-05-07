@@ -282,7 +282,9 @@ const MedicalIntakeForm: React.FC<MedicalIntakeFormProps> = ({
               <CardDescription>{label.required}</CardDescription>
             </div>
             <div className="w-full md:w-72">
-              <Label htmlFor="account_number">{label.account}</Label>
+              <Label htmlFor="account_number" className="text-gray-600">
+                {label.account}
+              </Label>
               <Input
                 id="account_number"
                 name="account_number"
@@ -696,7 +698,7 @@ const MedicalIntakeForm: React.FC<MedicalIntakeFormProps> = ({
                 />
                 <Label
                   htmlFor="medical-disclosure"
-                  className="text-sm leading-5"
+                  className="text-sm leading-5 text-gray-600"
                 >
                   I confirm that the information provided is accurate, and I
                   consent to DentalX storing and using this information for
@@ -749,7 +751,7 @@ function Field({
   return (
     <div className={className}>
       <div className="space-y-1.5">
-        <Label htmlFor={name}>
+        <Label htmlFor={name} className="text-gray-600">
           {text}
           {required ? <span className="text-red-500">*</span> : null}
         </Label>
