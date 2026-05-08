@@ -1866,6 +1866,15 @@ export function BookingCalendar({
                     </Button>
                   )}
                 </div>
+                {selectedBooking?.status === "confirmed" && (
+                  <Button
+                    variant="outline"
+                    className="w-full text-red-600 border-red-600 hover:bg-red-50"
+                    onClick={handleCancelBooking}
+                  >
+                    Cancel Booking
+                  </Button>
+                )}
                 <Button
                   variant="outline"
                   className="w-full"
@@ -1876,15 +1885,6 @@ export function BookingCalendar({
                 >
                   Close
                 </Button>
-                {selectedBooking?.status === "confirmed" && (
-                  <Button
-                    variant="outline"
-                    className="w-full text-red-600 border-red-600 hover:bg-red-50"
-                    onClick={handleCancelBooking}
-                  >
-                    Cancel Booking
-                  </Button>
-                )}
               </div>
 
               {showRescheduleForm && (

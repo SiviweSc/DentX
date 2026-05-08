@@ -242,6 +242,54 @@ function AccessPortalContent({ onClose, onLoginSuccess }: AccessPortalProps) {
     ? availabilityConfig
     : DEFAULT_AVAILABILITY_CONFIG;
 
+  const getEditMedicalFormInitialData = (
+    context: MedicalIntakeContextData,
+  ): Partial<MedicalIntakeData> => {
+    const previousPayload = context.previousForm?.form_payload;
+
+    if (previousPayload && typeof previousPayload === "object") {
+      return {
+        ...previousPayload,
+        patient_first_name:
+          previousPayload.patient_first_name ||
+          context.bookingInitialData?.patient_first_name ||
+          "",
+        patient_surname:
+          previousPayload.patient_surname ||
+          context.bookingInitialData?.patient_surname ||
+          "",
+        patient_cell:
+          previousPayload.patient_cell ||
+          context.bookingInitialData?.patient_cell ||
+          "",
+        patient_email:
+          previousPayload.patient_email ||
+          context.bookingInitialData?.patient_email ||
+          "",
+        patient_id_number:
+          previousPayload.patient_id_number ||
+          context.bookingInitialData?.patient_id_number ||
+          "",
+        medical_aid_name:
+          previousPayload.medical_aid_name ||
+          context.bookingInitialData?.medical_aid_name ||
+          "",
+        medical_aid_number:
+          previousPayload.medical_aid_number ||
+          context.bookingInitialData?.medical_aid_number ||
+          "",
+        patient_signature: "",
+        signature_date: "",
+      };
+    }
+
+    return {
+      ...(context.bookingInitialData || context.initialData || {}),
+      patient_signature: "",
+      signature_date: "",
+    };
+  };
+
   const resetSlotSelection = () => {
     setSlotDate(getNormalizedToday());
     setSlotTime("");
@@ -1783,7 +1831,7 @@ function AccessPortalContent({ onClose, onLoginSuccess }: AccessPortalProps) {
                     setExistingPdfUrl(null);
                   }}
                 >
-                  Fill New Form
+                  Edit Form
                 </Button>
               </div>
             </div>
@@ -1806,8 +1854,7 @@ function AccessPortalContent({ onClose, onLoginSuccess }: AccessPortalProps) {
               key={`${medicalIntakeContext.bookingId}-${useFreshMedicalFile ? "fresh" : "existing"}`}
               initialData={
                 useFreshMedicalFile
-                  ? medicalIntakeContext.bookingInitialData ||
-                    medicalIntakeContext.initialData
+                  ? getEditMedicalFormInitialData(medicalIntakeContext)
                   : medicalIntakeContext.previousForm?.form_payload ||
                     medicalIntakeContext.initialData
               }
