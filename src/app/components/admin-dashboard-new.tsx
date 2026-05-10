@@ -770,15 +770,17 @@ function TapConnectContent() {
       </div>
 
       {/* Search Bar */}
-      <div className="mb-8 relative">
-        <SearchIcon className="absolute left-3 top-3 w-5 h-5 text-gray-400" />
-        <input
-          type="text"
-          placeholder="Search tools..."
-          value={searchTerm}
-          onChange={(e) => setSearchTerm(e.target.value)}
-          className="w-full pl-10 pr-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#9a7b1d] focus:border-transparent"
-        />
+      <div className="mb-8 flex justify-end">
+        <div className="relative w-full md:w-80">
+          <SearchIcon className="absolute left-4 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400" />
+          <input
+            type="text"
+            placeholder="Search tools..."
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+            className="w-full pl-12 pr-4 py-3 bg-white border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#9a7b1d] focus:border-transparent shadow-sm hover:shadow-md transition-shadow"
+          />
+        </div>
       </div>
 
       {/* Services Grid */}
