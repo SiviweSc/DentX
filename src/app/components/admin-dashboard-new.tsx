@@ -38,6 +38,16 @@ import {
   Trash2,
   Pencil,
   Plus,
+  Network,
+  Heart,
+  Stethoscope,
+  Zap,
+  Bell,
+  Search as SearchIcon,
+  Play,
+  MessageSquare,
+  Brain,
+  Calculator,
 } from "lucide-react";
 import {
   supabase,
@@ -121,6 +131,12 @@ export function AdminDashboard({
       label: "Practice",
       icon: Building2,
       visible: permissions.practice,
+    },
+    {
+      id: "tap-connect",
+      label: "Tap Connect",
+      icon: Network,
+      visible: isSuperAdmin,
     },
     {
       id: "settings",
@@ -275,6 +291,7 @@ export function AdminDashboard({
               canManageAvailability={permissions.manageAvailability}
             />
           )}
+          {activeSection === "tap-connect" && <TapConnectContent />}
           {activeSection === "settings" && (
             <SettingsContent
               authToken={authToken}
@@ -648,6 +665,166 @@ function AvailabilitySettingsPanel({
             )}
           </CardContent>
         </Card>
+      )}
+    </div>
+  );
+}
+
+function TapConnectContent() {
+  const [selectedCard, setSelectedCard] = useState<string | null>(null);
+  const [searchTerm, setSearchTerm] = useState("");
+
+  interface TapService {
+    id: string;
+    title: string;
+    description: string;
+    icon: React.ReactNode;
+  }
+
+  const tapServices: TapService[] = [
+    {
+      id: "ampath",
+      title: "Ampath",
+      description: "Live electronic patient pathology results and lab history.",
+      icon: <Heart className="w-6 h-6" />,
+    },
+    {
+      id: "triage-ehr",
+      title: "Triage EHR",
+      description: "Immediate patient electronic health records.",
+      icon: <Stethoscope className="w-6 h-6" />,
+    },
+    {
+      id: "settings",
+      title: "Settings",
+      description:
+        "Manage your practice profile, billing setup and user permissions.",
+      icon: <ClipboardList className="w-6 h-6" />,
+    },
+    {
+      id: "ehr-intelligence",
+      title: "EHR Intelligence",
+      description: "Follow-up recommendations based on patient EHR.",
+      icon: <Brain className="w-6 h-6" />,
+    },
+    {
+      id: "news-info",
+      title: "News & Info",
+      description: "Industry updates, feedback and live tariff amendments.",
+      icon: <Bell className="w-6 h-6" />,
+    },
+    {
+      id: "look-up",
+      title: "Look Up",
+      description:
+        "View diagnoses, tariffs, consumables, drugs and injections.",
+      icon: <SearchIcon className="w-6 h-6" />,
+    },
+    {
+      id: "fam-check",
+      title: "TAP Fam Check",
+      description: "Patient validation, made simple.",
+      icon: <Users className="w-6 h-6" />,
+    },
+    {
+      id: "tap-tv",
+      title: "TAP TV",
+      description: "Product demos and walkthroughs.",
+      icon: <Play className="w-6 h-6" />,
+    },
+    {
+      id: "tap-chatbot",
+      title: "TAP Chatbot",
+      description: "Medical intelligence at your assistance.",
+      icon: <MessageSquare className="w-6 h-6" />,
+    },
+    {
+      id: "consultation-ai",
+      title: "Consultation AI",
+      description: "Summarize a recorded patient consultation.",
+      icon: <Brain className="w-6 h-6" />,
+    },
+    {
+      id: "calculators",
+      title: "Calculators",
+      description: "Medical calculators for diagnosis support.",
+      icon: <Calculator className="w-6 h-6" />,
+    },
+  ];
+
+  const filteredServices = tapServices.filter(
+    (service) =>
+      service.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      service.description.toLowerCase().includes(searchTerm.toLowerCase()),
+  );
+
+  return (
+    <div className="w-full">
+      {/* Header */}
+      <div className="mb-8 bg-gradient-to-r from-[#9a7b1d] to-[#7a5f1a] rounded-lg p-8 text-white">
+        <div className="text-sm font-semibold opacity-80 mb-2">WELCOME TO</div>
+        <h1 className="text-3xl md:text-4xl font-bold mb-2">TAP Connect</h1>
+        <p className="text-base opacity-90">
+          Your practice, perfectly connected. Choose a tool to get started.
+        </p>
+      </div>
+
+      {/* Search Bar */}
+      <div className="mb-8 relative">
+        <SearchIcon className="absolute left-3 top-3 w-5 h-5 text-gray-400" />
+        <input
+          type="text"
+          placeholder="Search tools..."
+          value={searchTerm}
+          onChange={(e) => setSearchTerm(e.target.value)}
+          className="w-full pl-10 pr-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#9a7b1d] focus:border-transparent"
+        />
+      </div>
+
+      {/* Services Grid */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+        {filteredServices.map((service) => (
+          <div
+            key={service.id}
+            onClick={() => setSelectedCard(service.id)}
+            className="relative group cursor-pointer"
+          >
+            <Card className="h-full border border-gray-200 hover:border-[#9a7b1d] transition-all duration-300 hover:shadow-lg bg-white overflow-hidden">
+              <CardContent className="p-6 flex flex-col h-full">
+                {/* Icon */}
+                <div className="mb-4 inline-flex w-12 h-12 bg-[#f5f1e8] rounded-lg items-center justify-center text-[#9a7b1d]">
+                  {service.icon}
+                </div>
+
+                {/* Title */}
+                <h3 className="text-lg font-semibold text-gray-900 mb-2">
+                  {service.title}
+                </h3>
+
+                {/* Description */}
+                <p className="text-sm text-gray-600 flex-1">
+                  {service.description}
+                </p>
+              </CardContent>
+            </Card>
+
+            {/* Coming Soon Overlay */}
+            <div className="absolute inset-0 bg-black bg-opacity-75 rounded-lg flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-300 pointer-events-none">
+              <div className="text-white text-center">
+                <p className="text-xl font-bold">Coming Soon</p>
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* No Results */}
+      {filteredServices.length === 0 && (
+        <div className="text-center py-12">
+          <p className="text-gray-500 text-lg">
+            No tools found matching your search.
+          </p>
+        </div>
       )}
     </div>
   );
