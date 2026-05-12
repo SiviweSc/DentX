@@ -67,6 +67,7 @@ import {
 } from "../lib/availability";
 import {
   getRoleLabel,
+  getShortRoleLabel,
   normalizeUserRole,
   sanitizeRolePermissions,
   type RoleDefinition,
@@ -74,6 +75,7 @@ import {
   type UserRole,
 } from "../lib/roles";
 import logo from "../../assets/cadae8615ee9587c8f09fa141332814475e43e29.png";
+import tapConnectBanner from "../../assets/lifeofdapo-kayak-5543935.jpg.jpeg";
 import { BookingCalendar } from "./booking-calendar";
 
 interface AdminDashboardProps {
@@ -291,7 +293,13 @@ export function AdminDashboard({
               canManageAvailability={permissions.manageAvailability}
             />
           )}
-          {activeSection === "tap-connect" && <TapConnectContent />}
+          {activeSection === "tap-connect" && (
+            <TapConnectContent
+              currentUserName={currentUserName}
+              currentUserRole={normalizedRole}
+              currentUserRoleLabel={currentUserRoleLabel}
+            />
+          )}
           {activeSection === "settings" && (
             <SettingsContent
               authToken={authToken}
@@ -670,8 +678,15 @@ function AvailabilitySettingsPanel({
   );
 }
 
-function TapConnectContent() {
-  const [selectedCard, setSelectedCard] = useState<string | null>(null);
+function TapConnectContent({
+  currentUserName,
+  currentUserRole,
+  currentUserRoleLabel,
+}: {
+  currentUserName: string;
+  currentUserRole: UserRole;
+  currentUserRoleLabel?: string;
+}) {
   const [searchTerm, setSearchTerm] = useState("");
 
   interface TapService {
@@ -682,6 +697,27 @@ function TapConnectContent() {
   }
 
   const tapServices: TapService[] = [
+    {
+      id: "tap-elite-online",
+      title: "TAP Elite Online",
+      description:
+        "Complete online practice management with real-time switching.",
+      icon: <LayoutDashboard className="w-6 h-6" />,
+    },
+    {
+      id: "claims-tracker",
+      title: "Claims Tracker",
+      description:
+        "Track medical aid claim submissions with simple, efficient reporting.",
+      icon: <FileText className="w-6 h-6" />,
+    },
+    {
+      id: "practice-performance",
+      title: "Practice Performance",
+      description:
+        "Financial statistics and graphs matched against claims submitted.",
+      icon: <ActivityIcon className="w-6 h-6" />,
+    },
     {
       id: "ampath",
       title: "Ampath",
@@ -752,21 +788,43 @@ function TapConnectContent() {
     },
   ];
 
+  const handleServiceClick = (serviceTitle: string) => {
+    toast.info(`${serviceTitle} is coming soon.`);
+  };
+
   const filteredServices = tapServices.filter(
     (service) =>
       service.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
       service.description.toLowerCase().includes(searchTerm.toLowerCase()),
   );
 
+  const currentHour = new Date().getHours();
+  const timeOfDay =
+    currentHour < 12 ? "MORNING" : currentHour < 18 ? "AFTERNOON" : "EVENING";
+  const rolePrefix = getShortRoleLabel(currentUserRole, currentUserRoleLabel);
+  const displayName = `${rolePrefix} ${currentUserName}`.trim();
+
   return (
     <div className="w-full">
-      {/* Header */}
-      <div className="mb-8 bg-gradient-to-r from-[#9a7b1d] to-[#7a5f1a] rounded-lg p-8 text-white">
-        <div className="text-sm font-semibold opacity-80 mb-2">WELCOME TO</div>
-        <h1 className="text-3xl md:text-4xl font-bold mb-2">TAP Connect</h1>
-        <p className="text-base opacity-90">
-          Your practice, perfectly connected. Choose a tool to get started.
-        </p>
+      {/* Header Banner */}
+      <div className="mb-8 relative overflow-hidden rounded-[30px] h-[220px] md:h-[240px]">
+        <img
+          src={tapConnectBanner}
+          alt="Tap Connect"
+          className="h-full w-full object-cover grayscale"
+        />
+        <div className="absolute inset-0 bg-black/45" />
+        <div className="absolute inset-0 flex flex-col items-center justify-center px-4 text-center text-white">
+          <div className="mb-2 text-xs font-semibold tracking-[0.28em] md:text-sm">
+            {`GOOD ${timeOfDay}`}
+          </div>
+          <h1 className="mb-2 text-4xl font-semibold md:text-6xl">
+            {displayName}
+          </h1>
+          <p className="text-base md:text-2xl">
+            Your practice, perfectly connected. Choose a tool to get started.
+          </p>
+        </div>
       </div>
 
       {/* Search Bar */}
@@ -788,7 +846,7 @@ function TapConnectContent() {
         {filteredServices.map((service) => (
           <div
             key={service.id}
-            onClick={() => setSelectedCard(service.id)}
+            onClick={() => handleServiceClick(service.title)}
             className="relative group cursor-pointer"
           >
             <Card className="h-full border border-gray-200 hover:border-[#9a7b1d] transition-all duration-300 hover:shadow-lg bg-white overflow-hidden">

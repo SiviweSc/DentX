@@ -61,6 +61,30 @@ export const getRoleLabel = (
     .join(" ");
 };
 
+export const getShortRoleLabel = (
+  role: string | null | undefined,
+  fallbackLabel?: string | null,
+): string => {
+  const normalizedRole = normalizeUserRole(role);
+
+  const shortByRole: Record<string, string> = {
+    super_admin: "S.Admin",
+    admin: "Admin",
+    administrator: "Admin",
+    doctor: "Dr",
+    receptionist: "Recep.",
+    nurse: "Nurse",
+    practice_manager: "P.Manager",
+    assistant_admin: "A.Admin",
+  };
+
+  if (normalizedRole && shortByRole[normalizedRole]) {
+    return shortByRole[normalizedRole];
+  }
+
+  return getRoleLabel(role, fallbackLabel);
+};
+
 export const sanitizeRolePermissions = (
   value: Partial<RolePermissions> | null | undefined,
 ): RolePermissions => ({
