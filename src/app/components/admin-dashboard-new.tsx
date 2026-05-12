@@ -3409,6 +3409,16 @@ function PatientsContent() {
         <div className="w-full min-h-[calc(100vh-11rem)] bg-white rounded-xl border border-gray-200 flex flex-col p-0 gap-0 overflow-hidden">
           {/* Header */}
           <div className="flex items-start gap-3 px-4 sm:px-6 pt-5 sm:pt-6 pb-4 border-b border-gray-100">
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={handleClosePatientDetails}
+              className="-ml-2 h-9 px-2 text-gray-600 hover:bg-[#F5F1E8] hover:text-[#9A7B1D]"
+            >
+              <ChevronLeft className="w-4 h-4 mr-1" />
+              Back
+            </Button>
             <div className="flex-shrink-0 w-10 h-10 rounded-full bg-[#9A7B1D]/10 flex items-center justify-center">
               <User className="w-5 h-5 text-[#9A7B1D]" />
             </div>
@@ -4639,6 +4649,19 @@ function UserManagementPanel({
     role: "admin" as UserRole,
     doctorServices: [] as string[],
   });
+  const [doctorRolePrompt, setDoctorRolePrompt] = useState<{
+    open: boolean;
+    userId: number | null;
+    username: string;
+    targetRole: UserRole;
+    selectedServices: string[];
+  }>({
+    open: false,
+    userId: null,
+    username: "",
+    targetRole: "doctor",
+    selectedServices: [],
+  });
 
   const doctorServiceOptionMap = new Map<string, string>();
 
@@ -4902,9 +4925,41 @@ function UserManagementPanel({
   };
 
   const handleRoleChange = async (userId: number, role: UserRole) => {
+    const normalizedUserId = Number(userId);
+    const targetRole = normalizeUserRole(role);
+    const existingUser = users.find(
+      (user) => Number(user?.id) === normalizedUserId,
+    );
+    const currentRole = normalizeUserRole(existingUser?.role);
+
+    if (targetRole === "doctor" && currentRole !== "doctor") {
+      if (doctorServiceOptions.length === 0) {
+        toast.error("Add at least one service type before assigning Doctor");
+        return;
+      }
+
+      const draftServices = Array.isArray(
+        editingDoctorServicesByUser[normalizedUserId],
+      )
+        ? editingDoctorServicesByUser[normalizedUserId].filter((serviceType) =>
+            doctorServiceLabelByValue.has(serviceType),
+          )
+        : [];
+
+      setDoctorRolePrompt({
+        open: true,
+        userId: normalizedUserId,
+        username: String(existingUser?.username || "this user"),
+        targetRole: role,
+        selectedServices: draftServices,
+      });
+      return;
+    }
+
     try {
-      setSavingUserId(userId);
-      const response = await apiFetchAuth(`/users/${userId}`, {
+      setSavingUserId(normalizedUserId);
+
+      const response = await apiFetchAuth(`/users/${normalizedUserId}`, {
         method: "PUT",
         body: JSON.stringify({ role }),
       });
@@ -4919,6 +4974,79 @@ function UserManagementPanel({
         toast.error(data.error || "Could not update role");
         return;
       }
+
+      toast.success("User role updated");
+      await loadUsers();
+    } catch (error) {
+      console.error("Failed to update role:", error);
+      toast.error("Could not update role");
+    } finally {
+      setSavingUserId(null);
+    }
+  };
+
+  const handleDoctorRolePromptServiceToggle = (
+    serviceType: string,
+    checked: boolean,
+  ) => {
+    setDoctorRolePrompt((prev) => {
+      const nextSelected = checked
+        ? Array.from(new Set([...prev.selectedServices, serviceType]))
+        : prev.selectedServices.filter((service) => service !== serviceType);
+
+      return {
+        ...prev,
+        selectedServices: nextSelected,
+      };
+    });
+  };
+
+  const handleConfirmDoctorRoleChange = async () => {
+    if (!Number.isInteger(doctorRolePrompt.userId)) {
+      toast.error("Invalid user account");
+      return;
+    }
+
+    if (doctorRolePrompt.selectedServices.length === 0) {
+      toast.error("Select at least one service for the doctor");
+      return;
+    }
+
+    const userId = Number(doctorRolePrompt.userId);
+    const selectedServices = [...doctorRolePrompt.selectedServices];
+
+    try {
+      setSavingUserId(userId);
+      const response = await apiFetchAuth(`/users/${userId}`, {
+        method: "PUT",
+        body: JSON.stringify({
+          role: doctorRolePrompt.targetRole,
+          doctorServices: selectedServices,
+        }),
+      });
+
+      if (!response) {
+        toast.error("Could not update role");
+        return;
+      }
+
+      const data = await response.json();
+      if (!response.ok || !data.success) {
+        toast.error(data.error || "Could not update role");
+        return;
+      }
+
+      setEditingDoctorServicesByUser((prev) => ({
+        ...prev,
+        [userId]: selectedServices,
+      }));
+      setDoctorRolePrompt({
+        open: false,
+        userId: null,
+        username: "",
+        targetRole: "doctor",
+        selectedServices: [],
+      });
 
       toast.success("User role updated");
       await loadUsers();
@@ -5575,6 +5703,83 @@ function UserManagementPanel({
           )}
         </div>
       </CardContent>
+
+      <Dialog
+        open={doctorRolePrompt.open}
+        onOpenChange={(open) => {
+          if (!open && savingUserId !== doctorRolePrompt.userId) {
+            setDoctorRolePrompt({
+              open: false,
+              userId: null,
+              username: "",
+              targetRole: "doctor",
+              selectedServices: [],
+            });
+          }
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Select Doctor Services</DialogTitle>
+            <DialogDescription>
+              Choose at least one service for {doctorRolePrompt.username} before
+              changing role to Doctor.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-64 overflow-y-auto pr-1">
+            {doctorServiceOptions.map((serviceOption) => (
+              <label
+                key={`doctor-role-prompt-${serviceOption.value}`}
+                className="flex items-center gap-2 text-sm text-gray-700"
+              >
+                <input
+                  type="checkbox"
+                  checked={doctorRolePrompt.selectedServices.includes(
+                    serviceOption.value,
+                  )}
+                  onChange={(event) =>
+                    handleDoctorRolePromptServiceToggle(
+                      serviceOption.value,
+                      event.target.checked,
+                    )
+                  }
+                  disabled={savingUserId === doctorRolePrompt.userId}
+                  className="h-4 w-4 rounded border-gray-300 text-[#9A7B1D] focus:ring-[#9A7B1D]"
+                />
+                <span>{serviceOption.label}</span>
+              </label>
+            ))}
+          </div>
+
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() =>
+                setDoctorRolePrompt({
+                  open: false,
+                  userId: null,
+                  username: "",
+                  targetRole: "doctor",
+                  selectedServices: [],
+                })
+              }
+              disabled={savingUserId === doctorRolePrompt.userId}
+            >
+              Cancel
+            </Button>
+            <Button
+              className="bg-[#9A7B1D] hover:bg-[#7d6418] text-white"
+              onClick={() => void handleConfirmDoctorRoleChange()}
+              disabled={savingUserId === doctorRolePrompt.userId}
+            >
+              {savingUserId === doctorRolePrompt.userId
+                ? "Saving..."
+                : "Save and Change Role"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </Card>
   );
 }
