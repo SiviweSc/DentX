@@ -688,6 +688,9 @@ function TapConnectContent({
   currentUserRoleLabel?: string;
 }) {
   const [searchTerm, setSearchTerm] = useState("");
+  const [activeTapModule, setActiveTapModule] = useState<
+    "grid" | "tap-elite-online"
+  >("grid");
 
   interface TapService {
     id: string;
@@ -788,8 +791,13 @@ function TapConnectContent({
     },
   ];
 
-  const handleServiceClick = (serviceTitle: string) => {
-    toast.info(`${serviceTitle} is coming soon.`);
+  const handleServiceClick = (service: TapService) => {
+    if (service.id === "tap-elite-online") {
+      setActiveTapModule("tap-elite-online");
+      return;
+    }
+
+    toast.info(`${service.title} is coming soon.`);
   };
 
   const filteredServices = tapServices.filter(
@@ -803,6 +811,15 @@ function TapConnectContent({
     currentHour < 12 ? "MORNING" : currentHour < 18 ? "AFTERNOON" : "EVENING";
   const rolePrefix = getShortRoleLabel(currentUserRole, currentUserRoleLabel);
   const displayName = `${rolePrefix} ${currentUserName}`.trim();
+
+  if (activeTapModule === "tap-elite-online") {
+    return (
+      <TapEliteOnlineMock
+        displayName={displayName}
+        onBack={() => setActiveTapModule("grid")}
+      />
+    );
+  }
 
   return (
     <div className="w-full">
@@ -846,7 +863,7 @@ function TapConnectContent({
         {filteredServices.map((service) => (
           <div
             key={service.id}
-            onClick={() => handleServiceClick(service.title)}
+            onClick={() => handleServiceClick(service)}
             className="relative group cursor-pointer"
           >
             <Card className="h-full border border-gray-200 hover:border-[#9a7b1d] transition-all duration-300 hover:shadow-lg bg-white overflow-hidden">
@@ -868,12 +885,13 @@ function TapConnectContent({
               </CardContent>
             </Card>
 
-            {/* Coming Soon Overlay */}
-            <div className="absolute inset-0 bg-black bg-opacity-75 rounded-lg flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-300 pointer-events-none">
-              <div className="text-white text-center">
-                <p className="text-xl font-bold">Coming Soon</p>
+            {service.id !== "tap-elite-online" && (
+              <div className="absolute inset-0 bg-black bg-opacity-75 rounded-lg flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-300 pointer-events-none">
+                <div className="text-white text-center">
+                  <p className="text-xl font-bold">Coming Soon</p>
+                </div>
               </div>
-            </div>
+            )}
           </div>
         ))}
       </div>
@@ -886,6 +904,432 @@ function TapConnectContent({
           </p>
         </div>
       )}
+    </div>
+  );
+}
+
+function TapEliteOnlineMock({
+  displayName,
+  onBack,
+}: {
+  displayName: string;
+  onBack: () => void;
+}) {
+  const [activeTool, setActiveTool] = useState("Info");
+  const [accountForm, setAccountForm] = useState({
+    accountRef: "19",
+    filingRef: "0419",
+    hospitalNo: "",
+    preAuth: "",
+    accountStatus: "Please Select Account Status",
+    scheme: "00 - Titus Mpofu Government Employees Medical Scheme (GEMS) Beryl",
+    attendingDoc: displayName.toUpperCase(),
+    accountGroup: "Please Select",
+    placeOfService: "Please Select",
+    fundsDepleted: "N",
+    isMainMember: "Y",
+    dependantCode: "00",
+    schemeName: "Government Employees",
+    plan: "Beryl",
+    phoneType: "Cell",
+    phoneNumber: "0732013997",
+    addressType: "Please Select",
+    addressLine1: "",
+    chronicNotes: "",
+  });
+
+  const topTools = [
+    { label: "Info", icon: ActivityIcon },
+    { label: "Dependants", icon: Users },
+    { label: "Billing", icon: BookOpen },
+    { label: "Action History", icon: History },
+    { label: "View History", icon: Eye },
+    { label: "Receipt", icon: FileText },
+    { label: "Payments", icon: CalendarIcon },
+    { label: "Documents", icon: Mail },
+    { label: "Notes", icon: ClipboardList },
+    { label: "Questionnaire", icon: FileText },
+  ];
+
+  const updateAccountField = (
+    field: keyof typeof accountForm,
+    value: string,
+  ) => {
+    setAccountForm((prev) => ({
+      ...prev,
+      [field]: value,
+    }));
+  };
+
+  return (
+    <div className="w-full rounded-2xl border border-gray-200 bg-white overflow-hidden">
+      <div className="flex flex-wrap items-start justify-between gap-4 border-b border-gray-200 px-4 py-4">
+        <div className="flex items-center gap-3">
+          <div className="h-14 w-14 rounded-xl border border-gray-300 bg-[#eef6f8] flex items-center justify-center text-[#2aa3b2]">
+            <LayoutDashboard className="h-8 w-8" />
+          </div>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={onBack}
+            className="border-[#9A7B1D] text-[#9A7B1D] hover:bg-[#F5F1E8]"
+          >
+            <ChevronLeft className="h-4 w-4 mr-1" />
+            Go Back
+          </Button>
+          <div>
+            <p className="text-2xl font-semibold text-gray-900">Account</p>
+            <p className="text-sm text-gray-600">
+              Overview And Details Of Account
+            </p>
+          </div>
+        </div>
+
+        <div className="text-right">
+          <p className="text-2xl font-semibold uppercase text-gray-900">
+            {displayName}
+          </p>
+          <p className="text-sm text-gray-700">User logged in as : 1079174</p>
+        </div>
+      </div>
+
+      <div className="border-b border-gray-200 px-3 py-3 overflow-x-auto">
+        <div className="flex items-start gap-2 min-w-max">
+          {topTools.map((tool) => {
+            const Icon = tool.icon;
+            return (
+              <button
+                key={tool.label}
+                type="button"
+                onClick={() => setActiveTool(tool.label)}
+                className={`w-24 rounded-lg border px-2 py-2 text-center transition-colors ${
+                  activeTool === tool.label
+                    ? "border-[#66b4c7] bg-[#eaf7fb]"
+                    : "border-gray-200 bg-white hover:bg-gray-50"
+                }`}
+              >
+                <div className="mx-auto mb-1 flex h-8 w-8 items-center justify-center rounded-md bg-[#eef6f8] text-[#2aa3b2]">
+                  <Icon className="h-4 w-4" />
+                </div>
+                <p className="text-xs text-gray-700 leading-tight">
+                  {tool.label}
+                </p>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      <div className="bg-[#f6f8fb] p-4 space-y-4">
+        <div className="rounded-lg border border-[#d7ebf1] bg-[#eef8fc] px-3 py-2 text-sm text-[#18697b]">
+          Active section: {activeTool}
+        </div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-5 gap-3">
+          <div className="space-y-1">
+            <label className="text-xs text-gray-500">Account Ref</label>
+            <input
+              value={accountForm.accountRef}
+              onChange={(e) => updateAccountField("accountRef", e.target.value)}
+              className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm bg-white"
+            />
+          </div>
+          <div className="space-y-1">
+            <label className="text-xs text-gray-500">Filing Ref</label>
+            <input
+              value={accountForm.filingRef}
+              onChange={(e) => updateAccountField("filingRef", e.target.value)}
+              className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm bg-white"
+            />
+          </div>
+          <div className="space-y-1">
+            <label className="text-xs text-gray-500">Last Hospital No.</label>
+            <input
+              value={accountForm.hospitalNo}
+              onChange={(e) => updateAccountField("hospitalNo", e.target.value)}
+              className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm bg-white"
+            />
+          </div>
+          <div className="space-y-1">
+            <label className="text-xs text-gray-500">Attending Doc</label>
+            <select
+              value={accountForm.attendingDoc}
+              onChange={(e) =>
+                updateAccountField("attendingDoc", e.target.value)
+              }
+              className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm bg-white"
+            >
+              <option>{displayName.toUpperCase()}</option>
+              <option>DR NKOSI 1098765</option>
+            </select>
+          </div>
+          <div className="space-y-1">
+            <label className="text-xs text-gray-500">Place Of Service</label>
+            <select
+              value={accountForm.placeOfService}
+              onChange={(e) =>
+                updateAccountField("placeOfService", e.target.value)
+              }
+              className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm bg-white"
+            >
+              <option>Please Select</option>
+              <option>Rooms</option>
+              <option>Hospital</option>
+              <option>Virtual</option>
+            </select>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-4 gap-3">
+          <div className="space-y-1">
+            <label className="text-xs text-gray-500">Pre Auth</label>
+            <input
+              value={accountForm.preAuth}
+              onChange={(e) => updateAccountField("preAuth", e.target.value)}
+              className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm bg-white"
+            />
+          </div>
+          <div className="space-y-1">
+            <label className="text-xs text-gray-500">Account Group</label>
+            <select
+              value={accountForm.accountGroup}
+              onChange={(e) =>
+                updateAccountField("accountGroup", e.target.value)
+              }
+              className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm bg-white"
+            >
+              <option>Please Select</option>
+              <option>Private</option>
+              <option>Corporate</option>
+              <option>Government</option>
+            </select>
+          </div>
+          <div className="space-y-1">
+            <label className="text-xs text-gray-500">Account Status</label>
+            <select
+              value={accountForm.accountStatus}
+              onChange={(e) =>
+                updateAccountField("accountStatus", e.target.value)
+              }
+              className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm bg-white"
+            >
+              <option>Please Select Account Status</option>
+              <option>Open</option>
+              <option>In Collections</option>
+              <option>Closed</option>
+            </select>
+          </div>
+          <div className="space-y-1">
+            <label className="text-xs text-gray-500">Funds Depleted</label>
+            <div className="flex h-10 items-center gap-4 rounded-md border border-gray-300 bg-white px-3 text-sm">
+              <label className="flex items-center gap-1.5">
+                <input
+                  type="radio"
+                  name="funds-depleted"
+                  checked={accountForm.fundsDepleted === "Y"}
+                  onChange={() => updateAccountField("fundsDepleted", "Y")}
+                />
+                Y
+              </label>
+              <label className="flex items-center gap-1.5">
+                <input
+                  type="radio"
+                  name="funds-depleted"
+                  checked={accountForm.fundsDepleted === "N"}
+                  onChange={() => updateAccountField("fundsDepleted", "N")}
+                />
+                N
+              </label>
+            </div>
+          </div>
+        </div>
+
+        <div className="space-y-1">
+          <label className="text-xs text-gray-500">Scheme</label>
+          <select
+            value={accountForm.scheme}
+            onChange={(e) => updateAccountField("scheme", e.target.value)}
+            className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm bg-white"
+          >
+            <option>
+              00 - Titus Mpofu Government Employees Medical Scheme (GEMS) Beryl
+            </option>
+            <option>01 - Discovery Health Classic Smart</option>
+            <option>02 - Bestmed Beat 2</option>
+          </select>
+        </div>
+
+        <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-2">
+          {[
+            "120",
+            "90",
+            "60",
+            "30",
+            "Current",
+            "Total Billed",
+            "Total Due",
+          ].map((label) => (
+            <div
+              key={label}
+              className="rounded-lg bg-[#8ab6cc] px-3 py-2 text-center text-white text-sm font-semibold"
+            >
+              {label}
+            </div>
+          ))}
+          {[
+            "R12396.50",
+            "R0.00",
+            "R0.00",
+            "R0.00",
+            "R1160.17",
+            "R13556.67",
+            "R13556.67",
+          ].map((value, idx) => (
+            <div
+              key={`${value}-${idx}`}
+              className={`rounded-lg px-3 py-2 text-center text-sm font-semibold ${
+                idx === 0
+                  ? "bg-[#fce3de] text-[#cf3e1e]"
+                  : "bg-white text-gray-700"
+              }`}
+            >
+              {value}
+            </div>
+          ))}
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-3">
+          <div className="rounded-xl border border-gray-200 bg-white p-3">
+            <p className="mb-2 rounded-md bg-[#8ab6cc] px-3 py-2 text-sm font-semibold text-white">
+              Patient
+            </p>
+            <div className="space-y-2">
+              <div className="rounded-md border border-gray-300 px-3 py-2 text-sm">
+                <p className="mb-2 text-xs text-gray-500">Is Main Member</p>
+                <div className="flex items-center gap-4">
+                  <label className="flex items-center gap-1.5">
+                    <input
+                      type="radio"
+                      name="main-member"
+                      checked={accountForm.isMainMember === "Y"}
+                      onChange={() => updateAccountField("isMainMember", "Y")}
+                    />
+                    Y
+                  </label>
+                  <label className="flex items-center gap-1.5">
+                    <input
+                      type="radio"
+                      name="main-member"
+                      checked={accountForm.isMainMember === "N"}
+                      onChange={() => updateAccountField("isMainMember", "N")}
+                    />
+                    N
+                  </label>
+                </div>
+              </div>
+              <input
+                value={accountForm.dependantCode}
+                onChange={(e) =>
+                  updateAccountField("dependantCode", e.target.value)
+                }
+                className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
+                placeholder="Dependant Code"
+              />
+            </div>
+          </div>
+          <div className="rounded-xl border border-gray-200 bg-white p-3">
+            <p className="mb-2 rounded-md bg-[#8ab6cc] px-3 py-2 text-sm font-semibold text-white">
+              Scheme
+            </p>
+            <div className="space-y-2">
+              <input
+                value={accountForm.schemeName}
+                onChange={(e) =>
+                  updateAccountField("schemeName", e.target.value)
+                }
+                className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
+              />
+              <input
+                value={accountForm.plan}
+                onChange={(e) => updateAccountField("plan", e.target.value)}
+                className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
+              />
+            </div>
+          </div>
+          <div className="rounded-xl border border-gray-200 bg-white p-3">
+            <p className="mb-2 rounded-md bg-[#8ab6cc] px-3 py-2 text-sm font-semibold text-white">
+              Phone Number
+            </p>
+            <div className="space-y-2">
+              <select
+                value={accountForm.phoneType}
+                onChange={(e) =>
+                  updateAccountField("phoneType", e.target.value)
+                }
+                className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
+              >
+                <option>Cell</option>
+                <option>Home</option>
+                <option>Work</option>
+              </select>
+              <input
+                value={accountForm.phoneNumber}
+                onChange={(e) =>
+                  updateAccountField("phoneNumber", e.target.value)
+                }
+                className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
+              />
+            </div>
+          </div>
+          <div className="rounded-xl border border-gray-200 bg-white p-3">
+            <p className="mb-2 rounded-md bg-[#8ab6cc] px-3 py-2 text-sm font-semibold text-white">
+              Address
+            </p>
+            <div className="space-y-2">
+              <select
+                value={accountForm.addressType}
+                onChange={(e) =>
+                  updateAccountField("addressType", e.target.value)
+                }
+                className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
+              >
+                <option>Please Select</option>
+                <option>Residential</option>
+                <option>Postal</option>
+                <option>Work</option>
+              </select>
+              <input
+                value={accountForm.addressLine1}
+                onChange={(e) =>
+                  updateAccountField("addressLine1", e.target.value)
+                }
+                className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
+                placeholder="Address Line 1"
+              />
+            </div>
+          </div>
+          <div className="rounded-xl border border-gray-200 bg-white p-3">
+            <p className="mb-2 rounded-md bg-[#8ab6cc] px-3 py-2 text-sm font-semibold text-white">
+              Clinical Notifications
+            </p>
+            <div className="space-y-2">
+              <input
+                value="Chronic Notes"
+                readOnly
+                className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm bg-gray-50"
+              />
+              <textarea
+                value={accountForm.chronicNotes}
+                onChange={(e) =>
+                  updateAccountField("chronicNotes", e.target.value)
+                }
+                className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm min-h-20"
+                placeholder="Enter chronic notes"
+              />
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
