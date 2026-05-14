@@ -103,6 +103,10 @@ export function AdminDashboard({
   const permissions = sanitizeRolePermissions(currentUserPermissions);
   const isSuperAdmin = normalizedRole === "super_admin";
 
+  useEffect(() => {
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }, [activeSection]);
+
   const menuItems = [
     {
       id: "dashboard",
@@ -915,6 +919,9 @@ function TapEliteOnlineMock({
   displayName: string;
   onBack: () => void;
 }) {
+  useEffect(() => {
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }, []);
   const [activeTool, setActiveTool] = useState("Info");
   const [accountForm, setAccountForm] = useState({
     accountRef: "19",
@@ -962,56 +969,110 @@ function TapEliteOnlineMock({
   };
 
   return (
-    <div className="w-full rounded-2xl border border-gray-200 bg-white overflow-hidden">
-      <div className="flex flex-wrap items-start justify-between gap-4 border-b border-gray-200 px-4 py-4">
+    <div
+      className="w-full rounded-2xl border overflow-hidden"
+      style={{
+        background: "var(--card)",
+        border: "1px solid var(--border)",
+        color: "var(--card-foreground)",
+      }}
+    >
+      <div
+        className="flex flex-wrap items-start justify-between gap-4 border-b px-4 py-4"
+        style={{ borderBottom: "1px solid var(--border)" }}
+      >
         <div className="flex items-center gap-3">
-          <div className="h-14 w-14 rounded-xl border border-gray-300 bg-[#eef6f8] flex items-center justify-center text-[#2aa3b2]">
+          <div
+            className="h-14 w-14 rounded-xl border flex items-center justify-center"
+            style={{
+              background: "var(--secondary)",
+              color: "var(--primary)",
+              border: "1px solid var(--border)",
+            }}
+          >
             <LayoutDashboard className="h-8 w-8" />
           </div>
           <Button
             variant="outline"
             size="sm"
             onClick={onBack}
-            className="border-[#9A7B1D] text-[#9A7B1D] hover:bg-[#F5F1E8]"
+            className=""
+            style={{
+              borderColor: "var(--primary)",
+              color: "var(--primary)",
+              background: "var(--secondary)",
+            }}
           >
             <ChevronLeft className="h-4 w-4 mr-1" />
             Go Back
           </Button>
           <div>
-            <p className="text-2xl font-semibold text-gray-900">Account</p>
-            <p className="text-sm text-gray-600">
+            <p
+              className="text-2xl font-semibold"
+              style={{ color: "var(--card-foreground)" }}
+            >
+              Account
+            </p>
+            <p className="text-sm" style={{ color: "var(--muted-foreground)" }}>
               Overview And Details Of Account
             </p>
           </div>
         </div>
 
         <div className="text-right">
-          <p className="text-2xl font-semibold uppercase text-gray-900">
+          <p
+            className="text-2xl font-semibold uppercase"
+            style={{ color: "var(--card-foreground)" }}
+          >
             {displayName}
           </p>
-          <p className="text-sm text-gray-700">User logged in as : 1079174</p>
+          <p className="text-sm" style={{ color: "var(--muted-foreground)" }}>
+            User logged in as : 1079174
+          </p>
         </div>
       </div>
 
-      <div className="border-b border-gray-200 px-3 py-3 overflow-x-auto">
+      <div
+        className="border-b px-3 py-3 overflow-x-auto"
+        style={{ borderBottom: "1px solid var(--border)" }}
+      >
         <div className="flex items-start gap-2 min-w-max">
           {topTools.map((tool) => {
             const Icon = tool.icon;
+            const isActive = activeTool === tool.label;
             return (
               <button
                 key={tool.label}
                 type="button"
                 onClick={() => setActiveTool(tool.label)}
-                className={`w-24 rounded-lg border px-2 py-2 text-center transition-colors ${
-                  activeTool === tool.label
-                    ? "border-[#66b4c7] bg-[#eaf7fb]"
-                    : "border-gray-200 bg-white hover:bg-gray-50"
-                }`}
+                className={`w-24 rounded-lg border px-2 py-2 text-center transition-colors`}
+                style={{
+                  border: isActive
+                    ? "1.5px solid var(--primary)"
+                    : "1px solid var(--border)",
+                  background: isActive ? "var(--secondary)" : "var(--card)",
+                  color: isActive
+                    ? "var(--primary)"
+                    : "var(--muted-foreground)",
+                }}
               >
-                <div className="mx-auto mb-1 flex h-8 w-8 items-center justify-center rounded-md bg-[#eef6f8] text-[#2aa3b2]">
+                <div
+                  className="mx-auto mb-1 flex h-8 w-8 items-center justify-center rounded-md"
+                  style={{
+                    background: "var(--secondary)",
+                    color: "var(--primary)",
+                  }}
+                >
                   <Icon className="h-4 w-4" />
                 </div>
-                <p className="text-xs text-gray-700 leading-tight">
+                <p
+                  className="text-xs leading-tight"
+                  style={{
+                    color: isActive
+                      ? "var(--primary)"
+                      : "var(--muted-foreground)",
+                  }}
+                >
                   {tool.label}
                 </p>
               </button>
@@ -1020,18 +1081,38 @@ function TapEliteOnlineMock({
         </div>
       </div>
 
-      <div className="bg-[#f6f8fb] p-4 space-y-4">
-        <div className="rounded-lg border border-[#d7ebf1] bg-[#eef8fc] px-3 py-2 text-sm text-[#18697b]">
+      <div
+        className="p-4 space-y-4"
+        style={{ background: "var(--background)" }}
+      >
+        <div
+          className="rounded-lg border px-3 py-2 text-sm"
+          style={{
+            background: "var(--secondary)",
+            border: "1px solid var(--border)",
+            color: "var(--primary)",
+          }}
+        >
           Active section: {activeTool}
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-5 gap-3">
           <div className="space-y-1">
-            <label className="text-xs text-gray-500">Account Ref</label>
+            <label
+              className="text-xs"
+              style={{ color: "var(--muted-foreground)" }}
+            >
+              Account Ref
+            </label>
             <input
               value={accountForm.accountRef}
               onChange={(e) => updateAccountField("accountRef", e.target.value)}
-              className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm bg-white"
+              className="w-full rounded-md border px-3 py-2 text-sm"
+              style={{
+                background: "var(--input-background)",
+                border: "1px solid var(--border)",
+                color: "var(--foreground)",
+              }}
             />
           </div>
           <div className="space-y-1">
@@ -1121,25 +1202,48 @@ function TapEliteOnlineMock({
           </div>
           <div className="space-y-1">
             <label className="text-xs text-gray-500">Funds Depleted</label>
-            <div className="flex h-10 items-center gap-4 rounded-md border border-gray-300 bg-white px-3 text-sm">
-              <label className="flex items-center gap-1.5">
-                <input
-                  type="radio"
-                  name="funds-depleted"
-                  checked={accountForm.fundsDepleted === "Y"}
-                  onChange={() => updateAccountField("fundsDepleted", "Y")}
-                />
-                Y
-              </label>
-              <label className="flex items-center gap-1.5">
-                <input
-                  type="radio"
-                  name="funds-depleted"
-                  checked={accountForm.fundsDepleted === "N"}
-                  onChange={() => updateAccountField("fundsDepleted", "N")}
-                />
-                N
-              </label>
+            <div
+              className="flex h-10 items-center gap-4 rounded-md border px-3 text-sm"
+              style={{
+                border: "1px solid var(--border)",
+                background: "var(--input-background)",
+              }}
+            >
+              {["Y", "N"].map((val) => (
+                <label
+                  key={val}
+                  className="flex items-center gap-1.5 cursor-pointer"
+                >
+                  <span
+                    className={`inline-block w-4 h-4 rounded-full border flex items-center justify-center transition-colors duration-150 mr-1 ${
+                      accountForm.fundsDepleted === val
+                        ? "bg-[var(--primary)] border-[var(--primary)]"
+                        : "bg-[var(--input-background)] border-[var(--border)]"
+                    }`}
+                    style={{ minWidth: 16, minHeight: 16 }}
+                  >
+                    {accountForm.fundsDepleted === val && (
+                      <span
+                        className="block w-2 h-2 rounded-full"
+                        style={{ background: "var(--primary-foreground)" }}
+                      />
+                    )}
+                  </span>
+                  <input
+                    type="radio"
+                    name="funds-depleted"
+                    checked={accountForm.fundsDepleted === val}
+                    onChange={() => updateAccountField("fundsDepleted", val)}
+                    className="hidden"
+                  />
+                  <span
+                    className="text-xs"
+                    style={{ color: "var(--card-foreground)" }}
+                  >
+                    {val}
+                  </span>
+                </label>
+              ))}
             </div>
           </div>
         </div>
@@ -1171,7 +1275,11 @@ function TapEliteOnlineMock({
           ].map((label) => (
             <div
               key={label}
-              className="rounded-lg bg-[#8ab6cc] px-3 py-2 text-center text-white text-sm font-semibold"
+              className="rounded-lg px-3 py-2 text-center text-sm font-semibold"
+              style={{
+                background: "var(--secondary)",
+                color: "var(--primary)",
+              }}
             >
               {label}
             </div>
@@ -1187,11 +1295,18 @@ function TapEliteOnlineMock({
           ].map((value, idx) => (
             <div
               key={`${value}-${idx}`}
-              className={`rounded-lg px-3 py-2 text-center text-sm font-semibold ${
+              className="rounded-lg px-3 py-2 text-center text-sm font-semibold"
+              style={
                 idx === 0
-                  ? "bg-[#fce3de] text-[#cf3e1e]"
-                  : "bg-white text-gray-700"
-              }`}
+                  ? {
+                      background: "var(--destructive)",
+                      color: "var(--destructive-foreground)",
+                    }
+                  : {
+                      background: "var(--card)",
+                      color: "var(--card-foreground)",
+                    }
+              }
             >
               {value}
             </div>
@@ -1199,32 +1314,69 @@ function TapEliteOnlineMock({
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-3">
-          <div className="rounded-xl border border-gray-200 bg-white p-3">
-            <p className="mb-2 rounded-md bg-[#8ab6cc] px-3 py-2 text-sm font-semibold text-white">
+          <div
+            className="rounded-xl border p-3"
+            style={{
+              background: "var(--card)",
+              border: "1px solid var(--border)",
+            }}
+          >
+            <p
+              className="mb-2 rounded-md px-3 py-2 text-sm font-semibold"
+              style={{
+                background: "var(--secondary)",
+                color: "var(--primary)",
+              }}
+            >
               Patient
             </p>
             <div className="space-y-2">
-              <div className="rounded-md border border-gray-300 px-3 py-2 text-sm">
-                <p className="mb-2 text-xs text-gray-500">Is Main Member</p>
+              <div
+                className="rounded-md border px-3 py-2 text-sm"
+                style={{ border: "1px solid var(--border)" }}
+              >
+                <p
+                  className="mb-2 text-xs"
+                  style={{ color: "var(--muted-foreground)" }}
+                >
+                  Is Main Member
+                </p>
                 <div className="flex items-center gap-4">
-                  <label className="flex items-center gap-1.5">
-                    <input
-                      type="radio"
-                      name="main-member"
-                      checked={accountForm.isMainMember === "Y"}
-                      onChange={() => updateAccountField("isMainMember", "Y")}
-                    />
-                    Y
-                  </label>
-                  <label className="flex items-center gap-1.5">
-                    <input
-                      type="radio"
-                      name="main-member"
-                      checked={accountForm.isMainMember === "N"}
-                      onChange={() => updateAccountField("isMainMember", "N")}
-                    />
-                    N
-                  </label>
+                  {["Y", "N"].map((val) => (
+                    <label
+                      key={val}
+                      className="flex items-center gap-1.5 cursor-pointer"
+                    >
+                      <span
+                        className={`inline-block w-4 h-4 rounded-full border flex items-center justify-center transition-colors duration-150 mr-1 ${
+                          accountForm.isMainMember === val
+                            ? "bg-[var(--primary)] border-[var(--primary)]"
+                            : "bg-[var(--input-background)] border-[var(--border)]"
+                        }`}
+                        style={{ minWidth: 16, minHeight: 16 }}
+                      >
+                        {accountForm.isMainMember === val && (
+                          <span
+                            className="block w-2 h-2 rounded-full"
+                            style={{ background: "var(--primary-foreground)" }}
+                          />
+                        )}
+                      </span>
+                      <input
+                        type="radio"
+                        name="main-member"
+                        checked={accountForm.isMainMember === val}
+                        onChange={() => updateAccountField("isMainMember", val)}
+                        className="hidden"
+                      />
+                      <span
+                        className="text-xs"
+                        style={{ color: "var(--card-foreground)" }}
+                      >
+                        {val}
+                      </span>
+                    </label>
+                  ))}
                 </div>
               </div>
               <input
@@ -1232,13 +1384,30 @@ function TapEliteOnlineMock({
                 onChange={(e) =>
                   updateAccountField("dependantCode", e.target.value)
                 }
-                className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
+                className="w-full rounded-md border px-3 py-2 text-sm"
+                style={{
+                  border: "1px solid var(--border)",
+                  background: "var(--input-background)",
+                  color: "var(--foreground)",
+                }}
                 placeholder="Dependant Code"
               />
             </div>
           </div>
-          <div className="rounded-xl border border-gray-200 bg-white p-3">
-            <p className="mb-2 rounded-md bg-[#8ab6cc] px-3 py-2 text-sm font-semibold text-white">
+          <div
+            className="rounded-xl border p-3"
+            style={{
+              background: "var(--card)",
+              border: "1px solid var(--border)",
+            }}
+          >
+            <p
+              className="mb-2 rounded-md px-3 py-2 text-sm font-semibold"
+              style={{
+                background: "var(--secondary)",
+                color: "var(--primary)",
+              }}
+            >
               Scheme
             </p>
             <div className="space-y-2">
@@ -1247,17 +1416,39 @@ function TapEliteOnlineMock({
                 onChange={(e) =>
                   updateAccountField("schemeName", e.target.value)
                 }
-                className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
+                className="w-full rounded-md border px-3 py-2 text-sm"
+                style={{
+                  border: "1px solid var(--border)",
+                  background: "var(--input-background)",
+                  color: "var(--foreground)",
+                }}
               />
               <input
                 value={accountForm.plan}
                 onChange={(e) => updateAccountField("plan", e.target.value)}
-                className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
+                className="w-full rounded-md border px-3 py-2 text-sm"
+                style={{
+                  border: "1px solid var(--border)",
+                  background: "var(--input-background)",
+                  color: "var(--foreground)",
+                }}
               />
             </div>
           </div>
-          <div className="rounded-xl border border-gray-200 bg-white p-3">
-            <p className="mb-2 rounded-md bg-[#8ab6cc] px-3 py-2 text-sm font-semibold text-white">
+          <div
+            className="rounded-xl border p-3"
+            style={{
+              background: "var(--card)",
+              border: "1px solid var(--border)",
+            }}
+          >
+            <p
+              className="mb-2 rounded-md px-3 py-2 text-sm font-semibold"
+              style={{
+                background: "var(--secondary)",
+                color: "var(--primary)",
+              }}
+            >
               Phone Number
             </p>
             <div className="space-y-2">
@@ -1266,7 +1457,12 @@ function TapEliteOnlineMock({
                 onChange={(e) =>
                   updateAccountField("phoneType", e.target.value)
                 }
-                className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
+                className="w-full rounded-md border px-3 py-2 text-sm"
+                style={{
+                  border: "1px solid var(--border)",
+                  background: "var(--input-background)",
+                  color: "var(--foreground)",
+                }}
               >
                 <option>Cell</option>
                 <option>Home</option>
@@ -1277,12 +1473,29 @@ function TapEliteOnlineMock({
                 onChange={(e) =>
                   updateAccountField("phoneNumber", e.target.value)
                 }
-                className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
+                className="w-full rounded-md border px-3 py-2 text-sm"
+                style={{
+                  border: "1px solid var(--border)",
+                  background: "var(--input-background)",
+                  color: "var(--foreground)",
+                }}
               />
             </div>
           </div>
-          <div className="rounded-xl border border-gray-200 bg-white p-3">
-            <p className="mb-2 rounded-md bg-[#8ab6cc] px-3 py-2 text-sm font-semibold text-white">
+          <div
+            className="rounded-xl border p-3"
+            style={{
+              background: "var(--card)",
+              border: "1px solid var(--border)",
+            }}
+          >
+            <p
+              className="mb-2 rounded-md px-3 py-2 text-sm font-semibold"
+              style={{
+                background: "var(--secondary)",
+                color: "var(--primary)",
+              }}
+            >
               Address
             </p>
             <div className="space-y-2">
@@ -1291,7 +1504,12 @@ function TapEliteOnlineMock({
                 onChange={(e) =>
                   updateAccountField("addressType", e.target.value)
                 }
-                className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
+                className="w-full rounded-md border px-3 py-2 text-sm"
+                style={{
+                  border: "1px solid var(--border)",
+                  background: "var(--input-background)",
+                  color: "var(--foreground)",
+                }}
               >
                 <option>Please Select</option>
                 <option>Residential</option>
@@ -1303,27 +1521,54 @@ function TapEliteOnlineMock({
                 onChange={(e) =>
                   updateAccountField("addressLine1", e.target.value)
                 }
-                className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
+                className="w-full rounded-md border px-3 py-2 text-sm"
+                style={{
+                  border: "1px solid var(--border)",
+                  background: "var(--input-background)",
+                  color: "var(--foreground)",
+                }}
                 placeholder="Address Line 1"
               />
             </div>
           </div>
-          <div className="rounded-xl border border-gray-200 bg-white p-3">
-            <p className="mb-2 rounded-md bg-[#8ab6cc] px-3 py-2 text-sm font-semibold text-white">
+          <div
+            className="rounded-xl border p-3"
+            style={{
+              background: "var(--card)",
+              border: "1px solid var(--border)",
+            }}
+          >
+            <p
+              className="mb-2 rounded-md px-3 py-2 text-sm font-semibold"
+              style={{
+                background: "var(--secondary)",
+                color: "var(--primary)",
+              }}
+            >
               Clinical Notifications
             </p>
             <div className="space-y-2">
               <input
                 value="Chronic Notes"
                 readOnly
-                className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm bg-gray-50"
+                className="w-full rounded-md border px-3 py-2 text-sm"
+                style={{
+                  border: "1px solid var(--border)",
+                  background: "var(--muted)",
+                  color: "var(--muted-foreground)",
+                }}
               />
               <textarea
                 value={accountForm.chronicNotes}
                 onChange={(e) =>
                   updateAccountField("chronicNotes", e.target.value)
                 }
-                className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm min-h-20"
+                className="w-full rounded-md border px-3 py-2 text-sm min-h-20"
+                style={{
+                  border: "1px solid var(--border)",
+                  background: "var(--input-background)",
+                  color: "var(--foreground)",
+                }}
                 placeholder="Enter chronic notes"
               />
             </div>
