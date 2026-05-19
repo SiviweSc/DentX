@@ -179,6 +179,8 @@ const EMPTY_ROLE_PERMISSIONS = {
   bookingsComplete: false,
   manageUsers: false,
   manageAvailability: false,
+  payslips: false,
+  managePayslips: false,
 };
 
 const PERMISSION_KEY_MAP: Record<string, string> = {
@@ -187,7 +189,12 @@ const PERMISSION_KEY_MAP: Record<string, string> = {
   "bookings.delete": "bookingsDelete",
   "settings.availability": "manageAvailability",
   "users.manage": "manageUsers",
+  "payslips.view": "payslips",
+  "payslips.manage": "managePayslips",
 };
+
+const STAFF_PAYSLIPS_BUCKET = "staff-payslips";
+const STAFF_PAYSLIPS_MAX_BYTES = 10 * 1024 * 1024;
 
 const normalizeServiceTypeValue = (value: unknown) =>
   String(value || "")
@@ -308,6 +315,8 @@ const sanitizeRolePermissions = (value: unknown) => {
     bookingsComplete: source.bookingsComplete === true,
     manageUsers: source.manageUsers === true,
     manageAvailability: source.manageAvailability === true,
+    payslips: source.payslips === true,
+    managePayslips: source.managePayslips === true,
   };
 };
 
@@ -342,6 +351,10 @@ const mergeUserPermissions = (
     manageAvailability:
       rolePermissions.manageAvailability === true &&
       source.manageAvailability !== false,
+    payslips: rolePermissions.payslips === true && source.payslips !== false,
+    managePayslips:
+      rolePermissions.managePayslips === true &&
+      source.managePayslips !== false,
   };
 };
 
@@ -750,6 +763,70 @@ const requireSuperAdmin = async (c: any, next: any) => {
   }
 
   await next();
+};
+
+const sanitizeFilename = (rawFilename: unknown) => {
+  const fallback = "payslip.pdf";
+  const filename = String(rawFilename || "").trim();
+  if (!filename) {
+    return fallback;
+  }
+
+  const cleaned = filename.replace(/[^a-zA-Z0-9._-]+/g, "_");
+  return cleaned || fallback;
+};
+
+const decodeLooseBase64ToBytes = (rawValue: unknown) => {
+  const value = String(rawValue || "").trim();
+  if (!value) {
+    return null;
+  }
+
+  const payload = value.includes(",") ? value.split(",").pop() || "" : value;
+
+  try {
+    const binary = atob(payload);
+    const bytes = new Uint8Array(binary.length);
+    for (let index = 0; index < binary.length; index += 1) {
+      bytes[index] = binary.charCodeAt(index);
+    }
+    return bytes;
+  } catch (_error) {
+    return null;
+  }
+};
+
+const ensurePayslipsBucket = async (
+  supabase: ReturnType<typeof getSupabaseClient>,
+) => {
+  const { data: buckets, error: listError } =
+    await supabase.storage.listBuckets();
+  if (listError) {
+    throw listError;
+  }
+
+  const exists = (buckets || []).some(
+    (bucket: any) =>
+      String(bucket?.id || "") === STAFF_PAYSLIPS_BUCKET ||
+      String(bucket?.name || "") === STAFF_PAYSLIPS_BUCKET,
+  );
+
+  if (exists) {
+    return;
+  }
+
+  const { error: createError } = await supabase.storage.createBucket(
+    STAFF_PAYSLIPS_BUCKET,
+    {
+      public: false,
+      fileSizeLimit: STAFF_PAYSLIPS_MAX_BYTES,
+      allowedMimeTypes: ["application/pdf", "image/png", "image/jpeg"],
+    },
+  );
+
+  if (createError && !String(createError.message || "").includes("already")) {
+    throw createError;
+  }
 };
 
 const DEFAULT_AVAILABILITY_CONFIG = {
@@ -3741,6 +3818,232 @@ app.put(
     }
   },
 );
+
+app.get("/make-server-34100c2d/payslips", requireAuth, async (c) => {
+  try {
+    const user = c.get("user");
+    const normalizedRole = normalizeRoleValue(user?.role);
+    const canManagePayslips =
+      normalizedRole === "super_admin" ||
+      hasPermission(user?.permissions || {}, "payslips.manage");
+    const canViewPayslips =
+      canManagePayslips ||
+      hasPermission(user?.permissions || {}, "payslips.view");
+
+    if (!canViewPayslips) {
+      return c.json({ error: "Forbidden" }, 403);
+    }
+
+    const requestedStaffUserId = Number(c.req.query("staffUserId"));
+    const supabase = getSupabaseClient();
+
+    let query = supabase
+      .from("staff_payslips")
+      .select(
+        "id, staff_user_id, period_label, file_name, file_path, mime_type, uploaded_by_username, created_at",
+      )
+      .order("created_at", { ascending: false });
+
+    if (canManagePayslips) {
+      if (Number.isInteger(requestedStaffUserId) && requestedStaffUserId > 0) {
+        query = query.eq("staff_user_id", requestedStaffUserId);
+      }
+    } else {
+      query = query.eq("staff_user_id", Number(user?.id));
+    }
+
+    const { data: payslips, error } = await query;
+    if (error) {
+      throw error;
+    }
+
+    const staffIds = Array.from(
+      new Set(
+        (payslips || [])
+          .map((record: any) => Number(record.staff_user_id))
+          .filter((id: number) => Number.isInteger(id)),
+      ),
+    );
+
+    const staffUsernameById = new Map<number, string>();
+    if (staffIds.length > 0) {
+      const { data: staffRows, error: staffError } = await supabase
+        .from("admin_users")
+        .select("id, username")
+        .in("id", staffIds);
+
+      if (staffError) {
+        throw staffError;
+      }
+
+      for (const row of staffRows || []) {
+        const id = Number((row as any).id);
+        if (!Number.isInteger(id)) {
+          continue;
+        }
+        staffUsernameById.set(id, String((row as any).username || ""));
+      }
+    }
+
+    const records = await Promise.all(
+      (payslips || []).map(async (record: any) => {
+        const { data: signedUrlData } = await supabase.storage
+          .from(STAFF_PAYSLIPS_BUCKET)
+          .createSignedUrl(String(record.file_path || ""), 60 * 60);
+
+        return {
+          id: Number(record.id),
+          staffUserId: Number(record.staff_user_id),
+          staffUsername:
+            staffUsernameById.get(Number(record.staff_user_id)) ||
+            `User ${record.staff_user_id}`,
+          periodLabel: String(record.period_label || ""),
+          fileName: String(record.file_name || ""),
+          mimeType: String(record.mime_type || "application/pdf"),
+          uploadedByUsername: String(record.uploaded_by_username || ""),
+          createdAt: String(record.created_at || ""),
+          downloadUrl: String(signedUrlData?.signedUrl || ""),
+        };
+      }),
+    );
+
+    return c.json({ success: true, payslips: records });
+  } catch (error) {
+    console.error("Get payslips error:", error);
+    return c.json({ error: "Failed to fetch payslips: " + error.message }, 500);
+  }
+});
+
+app.post("/make-server-34100c2d/payslips", requireAuth, async (c) => {
+  try {
+    const user = c.get("user");
+    const normalizedRole = normalizeRoleValue(user?.role);
+    const canManagePayslips =
+      normalizedRole === "super_admin" ||
+      hasPermission(user?.permissions || {}, "payslips.manage");
+
+    if (!canManagePayslips) {
+      return c.json({ error: "Forbidden" }, 403);
+    }
+
+    const {
+      staffUserId,
+      periodLabel,
+      fileName,
+      contentType,
+      fileContentBase64,
+    } = await c.req.json();
+
+    const numericStaffUserId = Number(staffUserId);
+    if (!Number.isInteger(numericStaffUserId) || numericStaffUserId <= 0) {
+      return c.json({ error: "A valid staff user is required" }, 400);
+    }
+
+    const normalizedPeriodLabel = String(periodLabel || "").trim();
+    if (!normalizedPeriodLabel) {
+      return c.json({ error: "Payslip period is required" }, 400);
+    }
+
+    const bytes = decodeLooseBase64ToBytes(fileContentBase64);
+    if (!bytes || bytes.length === 0) {
+      return c.json({ error: "Payslip file content is required" }, 400);
+    }
+
+    if (bytes.length > STAFF_PAYSLIPS_MAX_BYTES) {
+      return c.json(
+        { error: "Payslip file is too large. Max size is 10MB." },
+        400,
+      );
+    }
+
+    const normalizedContentType =
+      String(contentType || "").trim() || "application/pdf";
+    const safeFileName = sanitizeFilename(fileName);
+
+    const supabase = getSupabaseClient();
+
+    const { data: staffUser, error: staffUserError } = await supabase
+      .from("admin_users")
+      .select("id, username, role")
+      .eq("id", numericStaffUserId)
+      .maybeSingle();
+
+    if (staffUserError) {
+      throw staffUserError;
+    }
+
+    if (!staffUser) {
+      return c.json({ error: "Staff account not found" }, 404);
+    }
+
+    if (normalizeRoleValue(staffUser.role) !== "staff") {
+      return c.json(
+        { error: "Payslips can only be assigned to Staff users" },
+        400,
+      );
+    }
+
+    await ensurePayslipsBucket(supabase);
+
+    const timestampKey = new Date().toISOString().replace(/[.:]/g, "-");
+    const storagePath = `${numericStaffUserId}/${timestampKey}-${safeFileName}`;
+
+    const { error: uploadError } = await supabase.storage
+      .from(STAFF_PAYSLIPS_BUCKET)
+      .upload(storagePath, bytes, {
+        contentType: normalizedContentType,
+        upsert: false,
+      });
+
+    if (uploadError) {
+      throw uploadError;
+    }
+
+    const { data: insertedRecord, error: insertError } = await supabase
+      .from("staff_payslips")
+      .insert({
+        staff_user_id: numericStaffUserId,
+        period_label: normalizedPeriodLabel,
+        file_name: safeFileName,
+        file_path: storagePath,
+        mime_type: normalizedContentType,
+        uploaded_by_user_id: Number(user?.id) || null,
+        uploaded_by_username: String(user?.username || "Super Admin"),
+      })
+      .select(
+        "id, staff_user_id, period_label, file_name, mime_type, created_at",
+      )
+      .single();
+
+    if (insertError) {
+      throw insertError;
+    }
+
+    await supabase.from("activity_log").insert({
+      type: "payslip_uploaded",
+      user_name: String(user?.username || "Super Admin"),
+      user_role: normalizeRoleValue(user?.role),
+      description: `Uploaded payslip for ${staffUser.username} (${normalizedPeriodLabel})`,
+      patient_id: null,
+    });
+
+    return c.json({
+      success: true,
+      payslip: {
+        id: Number(insertedRecord.id),
+        staffUserId: Number(insertedRecord.staff_user_id),
+        staffUsername: String(staffUser.username || ""),
+        periodLabel: String(insertedRecord.period_label || ""),
+        fileName: String(insertedRecord.file_name || ""),
+        mimeType: String(insertedRecord.mime_type || ""),
+        createdAt: String(insertedRecord.created_at || ""),
+      },
+    });
+  } catch (error) {
+    console.error("Upload payslip error:", error);
+    return c.json({ error: "Failed to upload payslip: " + error.message }, 500);
+  }
+});
 
 // Get all patients
 app.get("/make-server-34100c2d/patients", requireAuth, async (c) => {

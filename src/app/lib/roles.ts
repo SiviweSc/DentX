@@ -13,6 +13,8 @@ export interface RolePermissions {
   bookingsComplete: boolean;
   manageUsers: boolean;
   manageAvailability: boolean;
+  payslips: boolean;
+  managePayslips: boolean;
 }
 
 export interface RoleDefinition {
@@ -34,6 +36,8 @@ export const EMPTY_ROLE_PERMISSIONS: RolePermissions = {
   bookingsComplete: false,
   manageUsers: false,
   manageAvailability: false,
+  payslips: false,
+  managePayslips: false,
 };
 
 export const normalizeUserRole = (role: string | null | undefined): UserRole =>
@@ -74,6 +78,7 @@ export const getShortRoleLabel = (
     doctor: "Dr",
     receptionist: "Recep.",
     nurse: "Nurse",
+    staff: "Staff",
     practice_manager: "P.Manager",
     assistant_admin: "A.Admin",
   };
@@ -100,4 +105,6 @@ export const sanitizeRolePermissions = (
   bookingsComplete: value?.bookingsComplete === true,
   manageUsers: value?.manageUsers === true,
   manageAvailability: value?.manageAvailability === true,
+  payslips: value?.payslips === true,
+  managePayslips: value?.managePayslips === true,
 });

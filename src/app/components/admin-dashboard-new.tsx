@@ -48,6 +48,8 @@ import {
   MessageSquare,
   Brain,
   Calculator,
+  Upload,
+  Download,
 } from "lucide-react";
 import {
   supabase,
@@ -77,6 +79,7 @@ import {
 import logo from "../../assets/cadae8615ee9587c8f09fa141332814475e43e29.png";
 import tapConnectBanner from "../../assets/lifeofdapo-kayak-5543935.jpg.jpeg";
 import { BookingCalendar } from "./booking-calendar";
+import { StaffPortalDashboard } from "./staff-portal-dashboard";
 
 interface AdminDashboardProps {
   onClose: () => void;
@@ -142,7 +145,15 @@ export function AdminDashboard({
       id: "tap-connect",
       label: "Tap Connect",
       icon: Network,
-      visible: isSuperAdmin,
+      visible: isSuperAdmin || normalizedRole === "admin",
+    },
+    {
+      id: "staff-portal",
+      label: "Staff Portal",
+      icon: Users,
+      visible:
+        normalizedRole === "staff" &&
+        (permissions.payslips || permissions.managePayslips),
     },
     {
       id: "settings",
@@ -299,9 +310,20 @@ export function AdminDashboard({
           )}
           {activeSection === "tap-connect" && (
             <TapConnectContent
+              authToken={authToken}
+              currentUserId={currentUserId}
               currentUserName={currentUserName}
               currentUserRole={normalizedRole}
               currentUserRoleLabel={currentUserRoleLabel}
+              currentUserPermissions={permissions}
+            />
+          )}
+          {activeSection === "staff-portal" && (
+            <StaffPortalDashboard
+              authToken={authToken}
+              currentUserId={currentUserId}
+              currentUserRole={normalizedRole}
+              currentUserPermissions={permissions}
             />
           )}
           {activeSection === "settings" && (
@@ -683,17 +705,23 @@ function AvailabilitySettingsPanel({
 }
 
 function TapConnectContent({
+  authToken,
+  currentUserId,
   currentUserName,
   currentUserRole,
   currentUserRoleLabel,
+  currentUserPermissions,
 }: {
+  authToken: string;
+  currentUserId: number;
   currentUserName: string;
   currentUserRole: UserRole;
   currentUserRoleLabel?: string;
+  currentUserPermissions: RolePermissions;
 }) {
   const [searchTerm, setSearchTerm] = useState("");
   const [activeTapModule, setActiveTapModule] = useState<
-    "grid" | "tap-elite-online"
+    "grid" | "tap-elite-online" | "tap-hr-management" | "staff-portal"
   >("grid");
 
   interface TapService {
@@ -711,6 +739,16 @@ function TapConnectContent({
         "Complete online practice management with real-time switching.",
       icon: <LayoutDashboard className="w-6 h-6" />,
     },
+    ...(currentUserPermissions.payslips || currentUserPermissions.managePayslips
+      ? [
+          {
+            id: "staff-portal",
+            title: "TAP HR Management",
+            description: "Payslips and leave management for staff.",
+            icon: <Users className="w-6 h-6" />,
+          },
+        ]
+      : []),
     {
       id: "claims-tracker",
       title: "Claims Tracker",
@@ -801,6 +839,11 @@ function TapConnectContent({
       return;
     }
 
+    if (service.id === "staff-portal") {
+      setActiveTapModule("staff-portal");
+      return;
+    }
+
     toast.info(`${service.title} is coming soon.`);
   };
 
@@ -822,6 +865,23 @@ function TapConnectContent({
         displayName={displayName}
         onBack={() => setActiveTapModule("grid")}
       />
+    );
+  }
+
+  if (activeTapModule === "staff-portal") {
+    return (
+      <div className="space-y-4">
+        <Button variant="outline" onClick={() => setActiveTapModule("grid")}>
+          <ChevronLeft className="w-4 h-4 mr-2" />
+          Back to Tap Connect
+        </Button>
+        <StaffPortalDashboard
+          authToken={authToken}
+          currentUserId={currentUserId}
+          currentUserRole={currentUserRole}
+          currentUserPermissions={currentUserPermissions}
+        />
+      </div>
     );
   }
 
@@ -889,13 +949,14 @@ function TapConnectContent({
               </CardContent>
             </Card>
 
-            {service.id !== "tap-elite-online" && (
-              <div className="absolute inset-0 bg-black bg-opacity-75 rounded-lg flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-300 pointer-events-none">
-                <div className="text-white text-center">
-                  <p className="text-xl font-bold">Coming Soon</p>
+            {service.id !== "tap-elite-online" &&
+              service.id !== "staff-portal" && (
+                <div className="absolute inset-0 bg-black bg-opacity-75 rounded-lg flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-300 pointer-events-none">
+                  <div className="text-white text-center">
+                    <p className="text-xl font-bold">Coming Soon</p>
+                  </div>
                 </div>
-              </div>
-            )}
+              )}
           </div>
         ))}
       </div>
@@ -5561,6 +5622,8 @@ function UserManagementPanel({
     { key: "settings", label: "Access Settings" },
     { key: "manageAvailability", label: "Manage Operating Hours" },
     { key: "manageUsers", label: "Manage Users and Roles" },
+    { key: "payslips", label: "Access Payslips" },
+    { key: "managePayslips", label: "Manage Payslips" },
   ];
   const protectedSelfPermissionKeys: Array<keyof RolePermissions> = [
     "dashboard",
@@ -6470,6 +6533,459 @@ function UserManagementPanel({
         </DialogContent>
       </Dialog>
     </Card>
+  );
+}
+
+export function PayslipsContent({
+  authToken,
+  currentUserRole,
+  currentUserPermissions,
+}: {
+  authToken: string;
+  currentUserId: number;
+  currentUserRole: UserRole;
+  currentUserPermissions: RolePermissions;
+}) {
+  const [loadingPayslips, setLoadingPayslips] = useState(true);
+  const [uploadingPayslip, setUploadingPayslip] = useState(false);
+  const [staffUsers, setStaffUsers] = useState<
+    Array<{ id: number; username: string }>
+  >([]);
+  const [selectedStaffUserId, setSelectedStaffUserId] = useState<number | null>(
+    null,
+  );
+  const [selectedPayslipFile, setSelectedPayslipFile] = useState<File | null>(
+    null,
+  );
+  const [periodInput, setPeriodInput] = useState("");
+  const periodDateRef = useRef<HTMLInputElement>(null);
+  const [filterStaffUserId, setFilterStaffUserId] = useState<number | null>(
+    null,
+  );
+  const [payslips, setPayslips] = useState<
+    Array<{
+      id: number;
+      staffUserId: number;
+      staffUsername: string;
+      periodLabel: string;
+      fileName: string;
+      mimeType: string;
+      uploadedByUsername: string;
+      createdAt: string;
+      downloadUrl: string;
+    }>
+  >([]);
+
+  const canManagePayslips =
+    normalizeUserRole(currentUserRole) === "super_admin" ||
+    currentUserPermissions.managePayslips;
+
+  const apiFetchAuth = async (path: string, init?: RequestInit) => {
+    let lastResponse: Response | null = null;
+
+    for (const baseUrl of supabaseAdminApiBaseUrls) {
+      const response = await fetch(`${baseUrl}${path}`, {
+        ...init,
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Basic ${authToken}`,
+          ...(init?.headers || {}),
+        },
+      });
+
+      lastResponse = response;
+      if (response.status === 404) {
+        continue;
+      }
+
+      return response;
+    }
+
+    return lastResponse;
+  };
+
+  const loadPayslips = async (staffUserId?: number | null) => {
+    try {
+      setLoadingPayslips(true);
+      const query =
+        canManagePayslips && Number.isInteger(staffUserId)
+          ? `?staffUserId=${staffUserId}`
+          : "";
+      const response = await apiFetchAuth(`/payslips${query}`);
+
+      if (!response) {
+        toast.error("Could not load payslips");
+        return;
+      }
+
+      const data = await response.json();
+      if (!response.ok || !data.success) {
+        toast.error(data.error || "Could not load payslips");
+        return;
+      }
+
+      setPayslips(Array.isArray(data.payslips) ? data.payslips : []);
+    } catch (error) {
+      console.error("Failed to load payslips:", error);
+      toast.error("Could not load payslips");
+    } finally {
+      setLoadingPayslips(false);
+    }
+  };
+
+  const loadStaffUsers = async () => {
+    if (!canManagePayslips) {
+      return;
+    }
+
+    try {
+      const response = await apiFetchAuth(`/users`);
+      if (!response) {
+        toast.error("Could not load staff users");
+        return;
+      }
+
+      const data = await response.json();
+      if (!response.ok || !data.success) {
+        toast.error(data.error || "Could not load staff users");
+        return;
+      }
+
+      const nextStaffUsers = (Array.isArray(data.users) ? data.users : [])
+        .filter((user: any) => normalizeUserRole(user?.role) === "staff")
+        .map((user: any) => ({
+          id: Number(user.id),
+          username: String(user.username || `User ${user.id}`),
+        }))
+        .filter((user: { id: number }) => Number.isInteger(user.id));
+
+      setStaffUsers(nextStaffUsers);
+
+      if (nextStaffUsers.length > 0) {
+        setSelectedStaffUserId((prev) => prev || nextStaffUsers[0].id);
+      }
+    } catch (error) {
+      console.error("Failed to load staff users:", error);
+      toast.error("Could not load staff users");
+    }
+  };
+
+  useEffect(() => {
+    void loadStaffUsers();
+  }, [canManagePayslips]);
+
+  useEffect(() => {
+    void loadPayslips(filterStaffUserId);
+  }, [canManagePayslips, filterStaffUserId]);
+
+  const convertFileToBase64 = (file: File) =>
+    new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const value = String(reader.result || "");
+        const base64 = value.includes(",") ? value.split(",")[1] : "";
+        if (!base64) {
+          reject(new Error("Could not read file"));
+          return;
+        }
+        resolve(base64);
+      };
+      reader.onerror = () => reject(new Error("Could not read file"));
+      reader.readAsDataURL(file);
+    });
+
+  // Convert dd/mm/yyyy → YYYY-MM-DD
+  const parseDMYToISO = (dmy: string) => {
+    const m = String(dmy || "").match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+    if (!m) return "";
+    return `${m[3]}-${m[2]}-${m[1]}`;
+  };
+
+  // Convert YYYY-MM-DD → dd/mm/yyyy
+  const formatISOToDMY = (iso: string) => {
+    const m = String(iso || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!m) return "";
+    return `${m[3]}/${m[2]}/${m[1]}`;
+  };
+
+  // dd/mm/yyyy → "Month YYYY" label for storage
+  const resolvePeriodLabel = (value: string) => {
+    const iso = parseDMYToISO(value.trim());
+    if (!iso) return "";
+    const d = new Date(`${iso}T00:00:00`);
+    if (Number.isNaN(d.getTime())) return "";
+    return format(d, "MMMM yyyy");
+  };
+
+  // Auto-mask as user types: insert slashes at positions 2 and 5
+  const handlePeriodInputChange = (raw: string) => {
+    let digits = raw.replace(/\D/g, "").slice(0, 8);
+    let masked = digits;
+    if (digits.length > 2) masked = digits.slice(0, 2) + "/" + digits.slice(2);
+    if (digits.length > 4) masked = masked.slice(0, 5) + "/" + digits.slice(4);
+    setPeriodInput(masked);
+  };
+
+  const handleUploadPayslip = async () => {
+    if (!canManagePayslips) {
+      toast.error("Only Super Admin can upload payslips");
+      return;
+    }
+
+    if (!Number.isInteger(selectedStaffUserId)) {
+      toast.error("Select a staff member");
+      return;
+    }
+
+    const normalizedPeriodLabel = resolvePeriodLabel(periodInput);
+    if (!normalizedPeriodLabel) {
+      toast.error("Payslip period is required");
+      return;
+    }
+
+    if (!selectedPayslipFile) {
+      toast.error("Select a payslip file");
+      return;
+    }
+
+    try {
+      setUploadingPayslip(true);
+      const fileContentBase64 = await convertFileToBase64(selectedPayslipFile);
+
+      const response = await apiFetchAuth(`/payslips`, {
+        method: "POST",
+        body: JSON.stringify({
+          staffUserId: selectedStaffUserId,
+          periodLabel: normalizedPeriodLabel,
+          fileName: selectedPayslipFile.name,
+          contentType: selectedPayslipFile.type || "application/pdf",
+          fileContentBase64,
+        }),
+      });
+
+      if (!response) {
+        toast.error("Could not upload payslip");
+        return;
+      }
+
+      const data = await response.json();
+      if (!response.ok || !data.success) {
+        toast.error(data.error || "Could not upload payslip");
+        return;
+      }
+
+      toast.success("Payslip uploaded");
+      setPeriodInput("");
+      setSelectedPayslipFile(null);
+      await loadPayslips(filterStaffUserId);
+    } catch (error) {
+      console.error("Failed to upload payslip:", error);
+      toast.error("Could not upload payslip");
+    } finally {
+      setUploadingPayslip(false);
+    }
+  };
+
+  return (
+    <div className="space-y-6">
+      <Card>
+        <CardHeader>
+          <CardTitle>Payslips</CardTitle>
+          <p className="text-sm text-gray-500">
+            {canManagePayslips
+              ? "Upload payslips and assign them to staff members."
+              : "View and download your assigned payslips."}
+          </p>
+        </CardHeader>
+      </Card>
+
+      {canManagePayslips && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Upload Payslip</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">
+                  Staff Member
+                </label>
+                <select
+                  value={selectedStaffUserId || ""}
+                  onChange={(event) =>
+                    setSelectedStaffUserId(Number(event.target.value))
+                  }
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#9A7B1D]"
+                >
+                  {staffUsers.length === 0 && (
+                    <option value="">No staff users found</option>
+                  )}
+                  {staffUsers.map((staffUser) => (
+                    <option key={staffUser.id} value={staffUser.id}>
+                      {staffUser.username}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">
+                  Period
+                </label>
+                <div className="relative">
+                  <input
+                    value={periodInput}
+                    onChange={(e) => handlePeriodInputChange(e.target.value)}
+                    placeholder="dd/mm/yyyy"
+                    maxLength={10}
+                    inputMode="numeric"
+                    className="w-full pl-3 pr-10 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#9A7B1D]"
+                  />
+                  <button
+                    type="button"
+                    tabIndex={-1}
+                    aria-label="Open date picker"
+                    onClick={() => periodDateRef.current?.showPicker()}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-gray-400 hover:text-[#9A7B1D] transition-colors"
+                  >
+                    <CalendarIcon className="w-4 h-4" />
+                  </button>
+                  <input
+                    ref={periodDateRef}
+                    type="date"
+                    tabIndex={-1}
+                    className="sr-only"
+                    onChange={(e) => {
+                      const dmy = formatISOToDMY(e.target.value);
+                      if (dmy) setPeriodInput(dmy);
+                    }}
+                  />
+                </div>
+                <p className="mt-1 text-xs text-gray-500">
+                  {resolvePeriodLabel(periodInput) || "Day / Month / Year"}
+                </p>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">
+                  File
+                </label>
+                <input
+                  type="file"
+                  accept="application/pdf,image/png,image/jpeg"
+                  onChange={(event) =>
+                    setSelectedPayslipFile(event.target.files?.[0] || null)
+                  }
+                  className="w-full text-sm"
+                />
+              </div>
+            </div>
+
+            <div className="flex justify-end">
+              <Button
+                onClick={() => void handleUploadPayslip()}
+                disabled={uploadingPayslip || staffUsers.length === 0}
+                className="bg-[#9A7B1D] hover:bg-[#7d6418] text-white"
+              >
+                <Upload className="w-4 h-4 mr-2" />
+                {uploadingPayslip ? "Uploading..." : "Upload Payslip"}
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      <Card>
+        <CardHeader className="flex flex-row items-center justify-between gap-2">
+          <CardTitle className="text-base">Payslip Records</CardTitle>
+          <div className="flex items-center gap-2">
+            {canManagePayslips && (
+              <select
+                value={filterStaffUserId || ""}
+                onChange={(event) =>
+                  setFilterStaffUserId(
+                    event.target.value ? Number(event.target.value) : null,
+                  )
+                }
+                className="px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-[#9A7B1D]"
+              >
+                <option value="">All staff</option>
+                {staffUsers.map((staffUser) => (
+                  <option key={`filter-${staffUser.id}`} value={staffUser.id}>
+                    {staffUser.username}
+                  </option>
+                ))}
+              </select>
+            )}
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => void loadPayslips(filterStaffUserId)}
+            >
+              Refresh
+            </Button>
+          </div>
+        </CardHeader>
+        <CardContent>
+          {loadingPayslips ? (
+            <p className="text-sm text-gray-500">Loading payslips...</p>
+          ) : payslips.length === 0 ? (
+            <p className="text-sm text-gray-500">No payslips found.</p>
+          ) : (
+            <div className="space-y-2">
+              {payslips.map((payslip) => (
+                <div
+                  key={payslip.id}
+                  className="rounded-lg border border-gray-200 p-3 flex flex-col md:flex-row md:items-center md:justify-between gap-3"
+                >
+                  <div>
+                    <p className="text-sm font-medium text-gray-900">
+                      {payslip.periodLabel}
+                    </p>
+                    <p className="text-xs text-gray-500">
+                      File: {payslip.fileName}
+                    </p>
+                    {canManagePayslips && (
+                      <p className="text-xs text-gray-500">
+                        Staff: {payslip.staffUsername}
+                      </p>
+                    )}
+                    <p className="text-xs text-gray-500">
+                      Uploaded:{" "}
+                      {payslip.createdAt
+                        ? format(
+                            new Date(payslip.createdAt),
+                            "d MMM yyyy HH:mm",
+                          )
+                        : "Unknown"}
+                      {payslip.uploadedByUsername
+                        ? ` by ${payslip.uploadedByUsername}`
+                        : ""}
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {payslip.downloadUrl ? (
+                      <a
+                        href={payslip.downloadUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        <Button size="sm" variant="outline">
+                          <Download className="w-4 h-4 mr-2" />
+                          Download
+                        </Button>
+                      </a>
+                    ) : (
+                      <Button size="sm" variant="outline" disabled>
+                        Download unavailable
+                      </Button>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+    </div>
   );
 }
 
