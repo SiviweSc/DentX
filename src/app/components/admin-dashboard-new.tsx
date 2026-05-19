@@ -6557,8 +6557,9 @@ export function PayslipsContent({
   const [selectedPayslipFile, setSelectedPayslipFile] = useState<File | null>(
     null,
   );
-  const [periodInput, setPeriodInput] = useState("");
-  const periodDateRef = useRef<HTMLInputElement>(null);
+  const [periodMonth, setPeriodMonth] = useState("");
+  const [periodCurrentYear, setPeriodCurrentYear] = useState(true);
+  const [periodYear, setPeriodYear] = useState("");
   const [filterStaffUserId, setFilterStaffUserId] = useState<number | null>(
     null,
   );
@@ -6694,36 +6695,28 @@ export function PayslipsContent({
       reader.readAsDataURL(file);
     });
 
-  // Convert dd/mm/yyyy → YYYY-MM-DD
-  const parseDMYToISO = (dmy: string) => {
-    const m = String(dmy || "").match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
-    if (!m) return "";
-    return `${m[3]}-${m[2]}-${m[1]}`;
-  };
+  const MONTH_NAMES = [
+    "January",
+    "February",
+    "March",
+    "April",
+    "May",
+    "June",
+    "July",
+    "August",
+    "September",
+    "October",
+    "November",
+    "December",
+  ];
 
-  // Convert YYYY-MM-DD → dd/mm/yyyy
-  const formatISOToDMY = (iso: string) => {
-    const m = String(iso || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
-    if (!m) return "";
-    return `${m[3]}/${m[2]}/${m[1]}`;
-  };
-
-  // dd/mm/yyyy → "Month YYYY" label for storage
-  const resolvePeriodLabel = (value: string) => {
-    const iso = parseDMYToISO(value.trim());
-    if (!iso) return "";
-    const d = new Date(`${iso}T00:00:00`);
-    if (Number.isNaN(d.getTime())) return "";
-    return format(d, "MMMM yyyy");
-  };
-
-  // Auto-mask as user types: insert slashes at positions 2 and 5
-  const handlePeriodInputChange = (raw: string) => {
-    let digits = raw.replace(/\D/g, "").slice(0, 8);
-    let masked = digits;
-    if (digits.length > 2) masked = digits.slice(0, 2) + "/" + digits.slice(2);
-    if (digits.length > 4) masked = masked.slice(0, 5) + "/" + digits.slice(4);
-    setPeriodInput(masked);
+  const buildPeriodLabel = () => {
+    if (!periodMonth) return "";
+    const year = periodCurrentYear
+      ? new Date().getFullYear()
+      : Number(periodYear);
+    if (!year || Number.isNaN(year)) return "";
+    return `${MONTH_NAMES[Number(periodMonth) - 1]} ${year}`;
   };
 
   const handleUploadPayslip = async () => {
@@ -6737,9 +6730,9 @@ export function PayslipsContent({
       return;
     }
 
-    const normalizedPeriodLabel = resolvePeriodLabel(periodInput);
+    const normalizedPeriodLabel = buildPeriodLabel();
     if (!normalizedPeriodLabel) {
-      toast.error("Payslip period is required");
+      toast.error("Select a month and year for the payslip period");
       return;
     }
 
@@ -6775,7 +6768,9 @@ export function PayslipsContent({
       }
 
       toast.success("Payslip uploaded");
-      setPeriodInput("");
+      setPeriodMonth("");
+      setPeriodCurrentYear(true);
+      setPeriodYear("");
       setSelectedPayslipFile(null);
       await loadPayslips(filterStaffUserId);
     } catch (error) {
@@ -6831,38 +6826,65 @@ export function PayslipsContent({
                 <label className="block text-xs font-medium text-gray-600 mb-1">
                   Period
                 </label>
-                <div className="relative">
+                <select
+                  value={periodMonth}
+                  onChange={(e) => setPeriodMonth(e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#9A7B1D]"
+                >
+                  <option value="">Select month…</option>
+                  {[
+                    "January",
+                    "February",
+                    "March",
+                    "April",
+                    "May",
+                    "June",
+                    "July",
+                    "August",
+                    "September",
+                    "October",
+                    "November",
+                    "December",
+                  ].map((name, i) => (
+                    <option key={name} value={String(i + 1).padStart(2, "0")}>
+                      {name}
+                    </option>
+                  ))}
+                </select>
+                <div className="mt-2 flex items-center gap-2">
                   <input
-                    value={periodInput}
-                    onChange={(e) => handlePeriodInputChange(e.target.value)}
-                    placeholder="dd/mm/yyyy"
-                    maxLength={10}
-                    inputMode="numeric"
-                    className="w-full pl-3 pr-10 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#9A7B1D]"
-                  />
-                  <button
-                    type="button"
-                    tabIndex={-1}
-                    aria-label="Open date picker"
-                    onClick={() => periodDateRef.current?.showPicker()}
-                    className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-gray-400 hover:text-[#9A7B1D] transition-colors"
-                  >
-                    <CalendarIcon className="w-4 h-4" />
-                  </button>
-                  <input
-                    ref={periodDateRef}
-                    type="date"
-                    tabIndex={-1}
-                    className="sr-only"
+                    id="period-current-year"
+                    type="checkbox"
+                    checked={periodCurrentYear}
                     onChange={(e) => {
-                      const dmy = formatISOToDMY(e.target.value);
-                      if (dmy) setPeriodInput(dmy);
+                      setPeriodCurrentYear(e.target.checked);
+                      if (e.target.checked) setPeriodYear("");
                     }}
+                    className="rounded border-gray-300 text-[#9A7B1D] focus:ring-[#9A7B1D]"
                   />
+                  <label
+                    htmlFor="period-current-year"
+                    className="text-xs text-gray-600 select-none"
+                  >
+                    Current year ({new Date().getFullYear()})
+                  </label>
                 </div>
-                <p className="mt-1 text-xs text-gray-500">
-                  {resolvePeriodLabel(periodInput) || "Day / Month / Year"}
-                </p>
+                {!periodCurrentYear && (
+                  <input
+                    type="number"
+                    value={periodYear}
+                    onChange={(e) => setPeriodYear(e.target.value)}
+                    placeholder="Year (e.g. 2025)"
+                    min={2000}
+                    max={2100}
+                    className="mt-2 w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#9A7B1D]"
+                  />
+                )}
+                {buildPeriodLabel() && (
+                  <p className="mt-1 text-xs text-[#9A7B1D] font-medium">
+                    {buildPeriodLabel()}
+                  </p>
+                )}
               </div>
               <div>
                 <label className="block text-xs font-medium text-gray-600 mb-1">
