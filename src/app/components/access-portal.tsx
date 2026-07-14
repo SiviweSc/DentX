@@ -16,10 +16,13 @@ import {
   supabase,
 } from "../../../utils/supabase/client";
 import {
+  BASE_SLOT_MINUTES,
   DEFAULT_AVAILABILITY_CONFIG,
   fetchAvailabilityConfig,
   fetchServiceCatalog,
+  getPractitionerDurationMinutes,
   getAvailableTimeSlots,
+  getSlotWindowTimes,
   isPractitionerEnabled,
   isDateBookable,
   isServiceEnabled,
@@ -225,6 +228,8 @@ function AccessPortalContent({ onClose, onLoginSuccess }: AccessPortalProps) {
   );
   const [slotTime, setSlotTime] = useState("");
   const [bookedSlots, setBookedSlots] = useState<string[]>([]);
+  const [slotCounts, setSlotCounts] = useState<Record<string, number>>({});
+  const [availableDoctorCount, setAvailableDoctorCount] = useState(0);
   const [savingBooking, setSavingBooking] = useState(false);
   const [eligibleDoctors, setEligibleDoctors] = useState<
     EligibleDoctorOption[]
@@ -294,6 +299,8 @@ function AccessPortalContent({ onClose, onLoginSuccess }: AccessPortalProps) {
     setSlotDate(getNormalizedToday());
     setSlotTime("");
     setBookedSlots([]);
+    setSlotCounts({});
+    setAvailableDoctorCount(0);
     setEligibleDoctors([]);
     setSelectedEligibleDoctorId("");
   };
@@ -437,7 +444,7 @@ function AccessPortalContent({ onClose, onLoginSuccess }: AccessPortalProps) {
       try {
         setLoadingEligibleDoctors(true);
         const response = await apiFetchPublic(
-          `/eligible-doctors?date=${encodeURIComponent(`${toLocalDateString(slotDate)}T09:00:00`)}&time=${encodeURIComponent(slotTime)}&serviceType=${encodeURIComponent(walkInServiceType)}`,
+          `/eligible-doctors?date=${encodeURIComponent(`${toLocalDateString(slotDate)}T09:00:00`)}&time=${encodeURIComponent(slotTime)}&serviceType=${encodeURIComponent(walkInServiceType)}&practitionerType=${encodeURIComponent(walkInPractitionerType)}`,
         );
 
         if (!response) {
@@ -475,7 +482,7 @@ function AccessPortalContent({ onClose, onLoginSuccess }: AccessPortalProps) {
     };
 
     void fetchEligibleDoctors();
-  }, [screen, slotDate, slotTime, walkInServiceType]);
+  }, [screen, slotDate, slotTime, walkInServiceType, walkInPractitionerType]);
 
   useEffect(() => {
     if (!slotDate) return;
@@ -483,40 +490,38 @@ function AccessPortalContent({ onClose, onLoginSuccess }: AccessPortalProps) {
     const fetchBookedSlots = async () => {
       try {
         const response = await apiFetchPublic(
-          `/booked-slots/${toLocalDateString(slotDate)}`,
+          `/booked-slots/${toLocalDateString(slotDate)}?serviceType=${encodeURIComponent(walkInServiceType)}&practitionerType=${encodeURIComponent(walkInPractitionerType)}`,
         );
         if (!response) {
           setBookedSlots([]);
+          setSlotCounts({});
+          setAvailableDoctorCount(0);
           return;
         }
 
         const data = await parseApiResponse(response, "Booked slots endpoint");
         setBookedSlots(Array.isArray(data.bookedSlots) ? data.bookedSlots : []);
+        setSlotCounts(
+          data.slotCounts && typeof data.slotCounts === "object"
+            ? data.slotCounts
+            : {},
+        );
+        setAvailableDoctorCount(Number(data.availableDoctorCount || 0));
       } catch (error) {
         console.error("Could not fetch booked slots:", error);
         setBookedSlots([]);
+        setSlotCounts({});
+        setAvailableDoctorCount(0);
       }
     };
 
     void fetchBookedSlots();
-  }, [slotDate]);
+  }, [slotDate, walkInServiceType, walkInPractitionerType]);
 
-  const availableTimes = useMemo(
+  const baseAvailableTimes = useMemo(
     () =>
       slotDate ? getAvailableTimeSlots(safeAvailabilityConfig, slotDate) : [],
     [safeAvailabilityConfig, slotDate],
-  );
-
-  const openTimes = useMemo(
-    () =>
-      availableTimes.filter(
-        (time) =>
-          !bookedSlots.includes(time) &&
-          !isPastTimeSlot(time, slotDate) &&
-          !!slotDate &&
-          isTimeWithinOperatingHours(safeAvailabilityConfig, slotDate, time),
-      ),
-    [safeAvailabilityConfig, availableTimes, bookedSlots, slotDate],
   );
 
   const availableWalkInServices = useMemo(
@@ -556,6 +561,92 @@ function AccessPortalContent({ onClose, onLoginSuccess }: AccessPortalProps) {
         (practitioner) => practitioner.id === walkInPractitionerType,
       ) || null,
     [selectedService, walkInPractitionerType],
+  );
+
+  const selectedDurationMinutes = useMemo(() => {
+    if (selectedPractitioner?.durationMinutes) {
+      return selectedPractitioner.durationMinutes;
+    }
+
+    if (!walkInServiceType || !walkInPractitionerType) {
+      return BASE_SLOT_MINUTES;
+    }
+
+    return getPractitionerDurationMinutes(
+      safeAvailabilityConfig,
+      walkInServiceType,
+      walkInPractitionerType,
+    );
+  }, [
+    safeAvailabilityConfig,
+    selectedPractitioner,
+    walkInServiceType,
+    walkInPractitionerType,
+  ]);
+
+  const selectableTimes = useMemo(
+    () =>
+      slotDate
+        ? getAvailableTimeSlots(
+            safeAvailabilityConfig,
+            slotDate,
+            selectedDurationMinutes,
+          )
+        : [],
+    [safeAvailabilityConfig, slotDate, selectedDurationMinutes],
+  );
+
+  const isDurationWindowAvailable = (time: string) => {
+    if (!slotDate) {
+      return false;
+    }
+
+    const requiredSlots = getSlotWindowTimes(time, selectedDurationMinutes);
+    if (!requiredSlots.length) {
+      return false;
+    }
+
+    return requiredSlots.every((slot) => {
+      if (!baseAvailableTimes.includes(slot)) {
+        return false;
+      }
+
+      if (isPastTimeSlot(slot, slotDate)) {
+        return false;
+      }
+
+      const slotLoad = Number(slotCounts[slot] || 0);
+      if (availableDoctorCount > 0) {
+        return slotLoad < availableDoctorCount;
+      }
+
+      return !bookedSlots.includes(slot);
+    });
+  };
+
+  const openTimes = useMemo(
+    () =>
+      selectableTimes.filter(
+        (time) =>
+          !!slotDate &&
+          isTimeWithinOperatingHours(
+            safeAvailabilityConfig,
+            slotDate,
+            time,
+            selectedDurationMinutes,
+          ) &&
+          isDurationWindowAvailable(time),
+      ),
+    [
+      safeAvailabilityConfig,
+      selectableTimes,
+      baseAvailableTimes,
+      slotDate,
+      selectedDurationMinutes,
+      slotCounts,
+      availableDoctorCount,
+      bookedSlots,
+    ],
   );
 
   const tryLoginRequest = async () => {
@@ -754,6 +845,13 @@ function AccessPortalContent({ onClose, onLoginSuccess }: AccessPortalProps) {
   const handleCreateWalkInBooking = async (source: WalkInSource) => {
     if (!slotDate || !slotTime) {
       toast.error("Please choose a date and time");
+      return;
+    }
+
+    if (!isDurationWindowAvailable(slotTime)) {
+      toast.error(
+        `Selected ${selectedDurationMinutes}-minute procedure overlaps an unavailable slot`,
+      );
       return;
     }
 

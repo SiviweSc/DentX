@@ -209,7 +209,34 @@ const formatServiceTypeLabel = (serviceType: string) =>
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
     .join(" ");
 
+const PRACTITIONER_LABEL_OVERRIDES: Record<string, string> = {
+  "slim-wires-bite-blocks": "Slim wires/Bite blocks (1 Hour)",
+  "ortho-review-brace-check-up": "Ortho review / Brace check up (30 Min)",
+  "consultation-brace-consultation":
+    "Consultation / Brace consultation (30 Min)",
+  "crown-denture-consult": "Crown / Denture consult (30 Min)",
+  "crown-installation": "Crown installation (2 Hours)",
+  "brace-removal-slim-wire-or-bite-blocks-removal":
+    "Brace removal / Slim wire or Bite blocks removal (1 Hour)",
+  "teeth-filling": "Teeth filling (1 Hour)",
+  "gold-silver-removal": "Gold / silver removal (1 Hour)",
+  "teeth-cleaning": "Teeth cleaning (30 Min)",
+  "teeth-whitening": "Teeth whitening (1 Hour 30 Min)",
+  "root-canal-treatment": "Root canal treatment (1 Hour)",
+  "normal-extraction": "Normal extraction (30 Min)",
+  "surgical-extraction": "Surgical extraction (1 Hour)",
+  "brace-installation": "Brace installation (1 Hour)",
+};
+
 const formatPractitionerLabel = (practitionerId: string) => {
+  const normalizedId = String(practitionerId || "")
+    .trim()
+    .toLowerCase();
+
+  if (PRACTITIONER_LABEL_OVERRIDES[normalizedId]) {
+    return PRACTITIONER_LABEL_OVERRIDES[normalizedId];
+  }
+
   if (practitionerId === "not-sure") {
     return "I'm not sure";
   }
@@ -517,10 +544,12 @@ const getEligibleDoctorsForServiceAndSlot = async (
   supabase: ReturnType<typeof getSupabaseClient>,
   {
     serviceType,
+    practitionerType,
     bookingDatePart,
     bookingTime,
   }: {
     serviceType: string;
+    practitionerType?: string;
     bookingDatePart: string;
     bookingTime: string;
   },
@@ -534,6 +563,12 @@ const getEligibleDoctorsForServiceAndSlot = async (
   if (availabilityConfig.services?.[normalizedServiceType]?.enabled === false) {
     return [];
   }
+
+  const requestedDurationMinutes = getServicePractitionerDurationMinutes(
+    availabilityConfig,
+    normalizedServiceType,
+    String(practitionerType || "").trim(),
+  );
 
   const { data: doctors, error: doctorsError } = await supabase
     .from("admin_users")
@@ -578,10 +613,9 @@ const getEligibleDoctorsForServiceAndSlot = async (
 
   const { data: conflicts, error: conflictsError } = await supabase
     .from("bookings")
-    .select("assigned_doctor_id")
+    .select("assigned_doctor_id, time, service_type, practitioner_type")
     .gte("date", `${bookingDatePart}T00:00:00`)
     .lt("date", `${bookingDatePart}T23:59:59`)
-    .eq("time", bookingTime)
     .in("status", ["confirmed", "completed"])
     .not("assigned_doctor_id", "is", null);
 
@@ -591,6 +625,18 @@ const getEligibleDoctorsForServiceAndSlot = async (
 
   const busyDoctorIds = new Set(
     (conflicts || [])
+      .filter((row: any) => {
+        const existingDurationMinutes = getBookingDurationMinutes(
+          availabilityConfig,
+          row,
+        );
+        return doTimeWindowsOverlap(
+          String(row.time || ""),
+          existingDurationMinutes,
+          bookingTime,
+          requestedDurationMinutes,
+        );
+      })
       .map((row: any) => Number(row.assigned_doctor_id))
       .filter((id: number) => Number.isInteger(id)),
   );
@@ -834,10 +880,38 @@ const DEFAULT_AVAILABILITY_CONFIG = {
     dental: {
       enabled: true,
       practitioners: {
-        "general-dentist": true,
-        "dental-therapist": true,
-        emergency: true,
+        "slim-wires-bite-blocks": true,
+        "ortho-review-brace-check-up": true,
+        "consultation-brace-consultation": true,
+        "crown-denture-consult": true,
+        "crown-installation": true,
+        "brace-removal-slim-wire-or-bite-blocks-removal": true,
+        "teeth-filling": true,
+        "gold-silver-removal": true,
+        "teeth-cleaning": true,
+        "teeth-whitening": true,
+        "root-canal-treatment": true,
+        "normal-extraction": true,
+        "surgical-extraction": true,
+        "brace-installation": true,
         "not-sure": true,
+      },
+      practitionerDurations: {
+        "slim-wires-bite-blocks": 60,
+        "ortho-review-brace-check-up": 30,
+        "consultation-brace-consultation": 30,
+        "crown-denture-consult": 30,
+        "crown-installation": 120,
+        "brace-removal-slim-wire-or-bite-blocks-removal": 60,
+        "teeth-filling": 60,
+        "gold-silver-removal": 60,
+        "teeth-cleaning": 30,
+        "teeth-whitening": 90,
+        "root-canal-treatment": 60,
+        "normal-extraction": 30,
+        "surgical-extraction": 60,
+        "brace-installation": 60,
+        "not-sure": 30,
       },
     },
     medical: {
@@ -846,6 +920,11 @@ const DEFAULT_AVAILABILITY_CONFIG = {
         "general-practitioner": true,
         "clinical-associate": true,
         "not-sure": true,
+      },
+      practitionerDurations: {
+        "general-practitioner": 30,
+        "clinical-associate": 30,
+        "not-sure": 30,
       },
     },
     "iv-therapy": {
@@ -856,6 +935,12 @@ const DEFAULT_AVAILABILITY_CONFIG = {
         immunity: true,
         consultation: true,
       },
+      practitionerDurations: {
+        hydration: 30,
+        "vitamin-boost": 30,
+        immunity: 30,
+        consultation: 30,
+      },
     },
     physiotherapy: {
       enabled: true,
@@ -864,6 +949,12 @@ const DEFAULT_AVAILABILITY_CONFIG = {
         "pain-management": true,
         rehabilitation: true,
         "not-sure": true,
+      },
+      practitionerDurations: {
+        "sports-injury": 30,
+        "pain-management": 30,
+        rehabilitation: 30,
+        "not-sure": 30,
       },
     },
   },
@@ -887,6 +978,25 @@ const DAY_INDEX_TO_KEY = [
   "friday",
   "saturday",
 ];
+
+const BASE_SLOT_MINUTES = 30;
+const DEFAULT_APPOINTMENT_DURATION_MINUTES = 30;
+
+const normalizeDurationMinutes = (
+  value: unknown,
+  fallback = DEFAULT_APPOINTMENT_DURATION_MINUTES,
+) => {
+  const numeric = Number(value);
+
+  if (!Number.isFinite(numeric) || numeric <= 0) {
+    return fallback;
+  }
+
+  return Math.max(
+    BASE_SLOT_MINUTES,
+    Math.round(numeric / BASE_SLOT_MINUTES) * BASE_SLOT_MINUTES,
+  );
+};
 
 const normalizeTimeValue = (value: unknown, fallback: string) => {
   if (typeof value !== "string") {
@@ -976,11 +1086,72 @@ const getAvailableTimeSlots = (dayConfig: any, slotDurationMinutes = 30) => {
   return slots;
 };
 
-const isTimeWithinOperatingHours = (config: any, date: Date, time: string) => {
+const isTimeWithinOperatingHours = (
+  config: any,
+  date: Date,
+  time: string,
+  slotDurationMinutes = BASE_SLOT_MINUTES,
+) => {
   const dayKey = getOperatingDayKey(date);
-  return getAvailableTimeSlots(config.operatingHours?.[dayKey]).includes(
-    normalizeTimeValue(time, ""),
+  return getAvailableTimeSlots(
+    config.operatingHours?.[dayKey],
+    normalizeDurationMinutes(slotDurationMinutes),
+  ).includes(normalizeTimeValue(time, ""));
+};
+
+const getServicePractitionerDurationMinutes = (
+  availabilityConfig: any,
+  serviceId: string,
+  practitionerId: string,
+) =>
+  normalizeDurationMinutes(
+    availabilityConfig?.services?.[serviceId]?.practitionerDurations?.[
+      practitionerId
+    ],
   );
+
+const getBookingDurationMinutes = (availabilityConfig: any, bookingLike: any) =>
+  getServicePractitionerDurationMinutes(
+    availabilityConfig,
+    normalizeServiceTypeValue(
+      bookingLike?.service_type ?? bookingLike?.serviceType,
+    ),
+    String(
+      (bookingLike?.practitioner_type ?? bookingLike?.practitionerType) || "",
+    ).trim(),
+  );
+
+const getTimeWindowSlots = (startTime: string, durationMinutes: number) => {
+  const start = timeStringToMinutes(startTime);
+  if (start === null) {
+    return [] as string[];
+  }
+
+  const slotCount = Math.max(
+    1,
+    Math.ceil(normalizeDurationMinutes(durationMinutes) / BASE_SLOT_MINUTES),
+  );
+
+  const slots: string[] = [];
+  for (let i = 0; i < slotCount; i += 1) {
+    const current = start + i * BASE_SLOT_MINUTES;
+    const hours = String(Math.floor(current / 60)).padStart(2, "0");
+    const minutes = String(current % 60).padStart(2, "0");
+    slots.push(`${hours}:${minutes}`);
+  }
+
+  return slots;
+};
+
+const doTimeWindowsOverlap = (
+  leftStart: string,
+  leftDurationMinutes: number,
+  rightStart: string,
+  rightDurationMinutes: number,
+) => {
+  const left = new Set(getTimeWindowSlots(leftStart, leftDurationMinutes));
+  const right = getTimeWindowSlots(rightStart, rightDurationMinutes);
+  return right.some((slot) => left.has(slot));
 };
 
 const normalizePhoneValue = (value: string) =>
@@ -1537,6 +1708,7 @@ const normalizeAvailabilityConfig = (config: any) => {
         normalized.services[serviceId] = {
           enabled: true,
           practitioners: {},
+          practitionerDurations: {},
         };
       }
 
@@ -1557,6 +1729,19 @@ const normalizeAvailabilityConfig = (config: any) => {
           normalized.services[serviceId].practitioners[practitionerId] =
             practitionerEnabled;
         }
+      }
+
+      const incomingDurations =
+        incomingService.practitionerDurations &&
+        typeof incomingService.practitionerDurations === "object"
+          ? incomingService.practitionerDurations
+          : {};
+
+      for (const [practitionerId, durationMinutes] of Object.entries(
+        incomingDurations,
+      )) {
+        normalized.services[serviceId].practitionerDurations[practitionerId] =
+          normalizeDurationMinutes(durationMinutes);
       }
     }
   }
@@ -1581,7 +1766,7 @@ const fetchAvailabilityConfigFromDb = async (supabase: any) => {
       supabase.from("service_availability").select("service_id, enabled"),
       supabase
         .from("practitioner_availability")
-        .select("service_id, practitioner_id, enabled"),
+        .select("service_id, practitioner_id, enabled, duration_minutes"),
       supabase
         .from("operating_hours")
         .select("day_of_week, enabled, start_time, end_time"),
@@ -1590,7 +1775,11 @@ const fetchAvailabilityConfigFromDb = async (supabase: any) => {
   const config = {
     services: {} as Record<
       string,
-      { enabled: boolean; practitioners: Record<string, boolean> }
+      {
+        enabled: boolean;
+        practitioners: Record<string, boolean>;
+        practitionerDurations: Record<string, number>;
+      }
     >,
     operatingHours: JSON.parse(
       JSON.stringify(DEFAULT_AVAILABILITY_CONFIG.operatingHours),
@@ -1603,6 +1792,9 @@ const fetchAvailabilityConfigFromDb = async (supabase: any) => {
     config.services[serviceId] = {
       enabled: serviceConfig.enabled,
       practitioners: { ...serviceConfig.practitioners },
+      practitionerDurations: {
+        ...serviceConfig.practitionerDurations,
+      },
     };
   }
 
@@ -1615,6 +1807,7 @@ const fetchAvailabilityConfigFromDb = async (supabase: any) => {
         config.services[serviceId] = {
           enabled: Boolean(service.enabled),
           practitioners: {},
+          practitionerDurations: {},
         };
       } else {
         config.services[serviceId].enabled = Boolean(service.enabled);
@@ -1632,12 +1825,15 @@ const fetchAvailabilityConfigFromDb = async (supabase: any) => {
         config.services[serviceId] = {
           enabled: true,
           practitioners: {},
+          practitionerDurations: {},
         };
       }
 
       config.services[serviceId].practitioners[practitionerId] = Boolean(
         practitioner.enabled,
       );
+      config.services[serviceId].practitionerDurations[practitionerId] =
+        normalizeDurationMinutes(practitioner.duration_minutes);
     }
   }
 
@@ -1670,7 +1866,7 @@ const fetchServiceCatalogFromDb = async (supabase: any) => {
       supabase.from("service_availability").select("service_id"),
       supabase
         .from("practitioner_availability")
-        .select("service_id, practitioner_id"),
+        .select("service_id, practitioner_id, duration_minutes"),
     ]);
 
   const serviceLabelById = new Map<string, string>();
@@ -1690,28 +1886,35 @@ const fetchServiceCatalogFromDb = async (supabase: any) => {
     serviceLabelById.set(serviceId, formatServiceTypeLabel(serviceId));
   }
 
-  const practitionerByService = new Map<string, Set<string>>();
+  const practitionerByService = new Map<string, Map<string, number>>();
   for (const row of practitionerResult.data || []) {
     const serviceId = normalizeServiceTypeValue(row?.service_id);
     const practitionerId = String(row?.practitioner_id || "").trim();
     if (!serviceId || !practitionerId) continue;
 
     if (!practitionerByService.has(serviceId)) {
-      practitionerByService.set(serviceId, new Set<string>());
+      practitionerByService.set(serviceId, new Map<string, number>());
     }
 
-    practitionerByService.get(serviceId)?.add(practitionerId);
+    practitionerByService
+      .get(serviceId)
+      ?.set(practitionerId, normalizeDurationMinutes(row?.duration_minutes));
   }
 
   const serviceCatalog = Array.from(serviceLabelById.entries())
     .map(([serviceId, serviceLabel]) => ({
       id: serviceId,
       title: serviceLabel,
-      practitioners: Array.from(practitionerByService.get(serviceId) || [])
-        .sort((a, b) => a.localeCompare(b))
-        .map((practitionerId) => ({
+      practitioners: Array.from(
+        (
+          practitionerByService.get(serviceId) || new Map<string, number>()
+        ).entries(),
+      )
+        .sort((a, b) => a[0].localeCompare(b[0]))
+        .map(([practitionerId, durationMinutes]) => ({
           id: practitionerId,
           title: formatPractitionerLabel(practitionerId),
+          durationMinutes: normalizeDurationMinutes(durationMinutes),
         })),
     }))
     .sort((a, b) => a.title.localeCompare(b.title));
@@ -1813,6 +2016,7 @@ app.post(
             service_id: normalizedServiceType,
             practitioner_id: "not-sure",
             enabled: true,
+            duration_minutes: DEFAULT_APPOINTMENT_DURATION_MINUTES,
             updated_at: new Date().toISOString(),
           },
           { onConflict: "service_id,practitioner_id" },
@@ -1861,6 +2065,9 @@ app.put(
             service_id: serviceId,
             practitioner_id: practitionerId,
             enabled,
+            duration_minutes: normalizeDurationMinutes(
+              serviceConfig?.practitionerDurations?.[practitionerId],
+            ),
           }),
         ),
       );
@@ -2057,6 +2264,11 @@ app.post("/make-server-34100c2d/bookings", async (c) => {
     }
 
     const bookingDate = new Date(`${bookingDatePart}T12:00:00`);
+    const bookingDurationMinutes = getServicePractitionerDurationMinutes(
+      availabilityConfig,
+      String(bookingData.serviceType || "").trim(),
+      String(bookingData.practitionerType || "").trim(),
+    );
 
     if (!availabilityConfig.services?.[bookingData.serviceType]?.enabled) {
       return c.json({ error: "That service is currently unavailable" }, 400);
@@ -2074,7 +2286,12 @@ app.post("/make-server-34100c2d/bookings", async (c) => {
     }
 
     if (
-      !isTimeWithinOperatingHours(availabilityConfig, bookingDate, bookingTime)
+      !isTimeWithinOperatingHours(
+        availabilityConfig,
+        bookingDate,
+        bookingTime,
+        bookingDurationMinutes,
+      )
     ) {
       return c.json({ error: "That time is outside operating hours" }, 400);
     }
@@ -2083,18 +2300,27 @@ app.post("/make-server-34100c2d/bookings", async (c) => {
       const { data: slotPendingBookings, error: slotPendingBookingsError } =
         await supabase
           .from("bookings")
-          .select("id")
+          .select("id, time, service_type, practitioner_type")
           .gte("date", `${bookingDatePart}T00:00:00`)
           .lt("date", `${bookingDatePart}T23:59:59`)
-          .eq("time", bookingTime)
           .eq("status", "pending")
-          .limit(1);
+          .limit(100);
 
       if (slotPendingBookingsError) {
         throw slotPendingBookingsError;
       }
 
-      if ((slotPendingBookings || []).length > 0) {
+      const hasOverlappingPending = (slotPendingBookings || []).some(
+        (pendingBooking: any) =>
+          doTimeWindowsOverlap(
+            String(pendingBooking?.time || ""),
+            getBookingDurationMinutes(availabilityConfig, pendingBooking),
+            bookingTime,
+            bookingDurationMinutes,
+          ),
+      );
+
+      if (hasOverlappingPending) {
         return c.json(
           {
             error:
@@ -2117,7 +2343,7 @@ app.post("/make-server-34100c2d/bookings", async (c) => {
       await supabase
         .from("bookings")
         .select(
-          "id, first_name, last_name, phone, id_number, date, time, status, service_type",
+          "id, first_name, last_name, phone, id_number, date, time, status, service_type, practitioner_type",
         )
         .gte("date", `${bookingDatePart}T00:00:00`)
         .lt("date", `${bookingDatePart}T23:59:59`)
@@ -2134,7 +2360,12 @@ app.post("/make-server-34100c2d/bookings", async (c) => {
 
     const sameClientSameSlotBookings = sameClientSameDayBookings.filter(
       (candidate: any) =>
-        normalizeTimeValue(candidate.time, "") === bookingTime,
+        doTimeWindowsOverlap(
+          normalizeTimeValue(candidate.time, ""),
+          getBookingDurationMinutes(availabilityConfig, candidate),
+          bookingTime,
+          bookingDurationMinutes,
+        ),
     );
 
     if (sameClientSameSlotBookings.length > 0) {
@@ -2221,6 +2452,7 @@ app.post("/make-server-34100c2d/bookings", async (c) => {
         supabase,
         {
           serviceType: String(bookingData.serviceType || ""),
+          practitionerType: String(bookingData.practitionerType || ""),
           bookingDatePart,
           bookingTime,
         },
@@ -2872,6 +3104,15 @@ app.put("/make-server-34100c2d/bookings/:id", requireAuth, async (c) => {
         updates?.time || existingBooking.time,
         existingBooking.time,
       );
+      const availabilityConfig = await fetchAvailabilityConfigFromDb(supabase);
+      const requestedDurationMinutes = getBookingDurationMinutes(
+        availabilityConfig,
+        {
+          service_type: updates?.service_type || existingBooking.service_type,
+          practitioner_type:
+            updates?.practitioner_type || existingBooking.practitioner_type,
+        },
+      );
 
       const { data: doctorRow } = await supabase
         .from("admin_users")
@@ -2892,16 +3133,24 @@ app.put("/make-server-34100c2d/bookings/:id", requireAuth, async (c) => {
 
       const { data: conflict } = await supabase
         .from("bookings")
-        .select("id")
+        .select("id, time, service_type, practitioner_type")
         .gte("date", `${bookingDatePart}T00:00:00`)
         .lt("date", `${bookingDatePart}T23:59:59`)
-        .eq("time", bookingTime)
         .eq("assigned_doctor_id", requestedDoctorId)
         .in("status", ["confirmed", "completed"])
         .neq("id", existingBooking.id)
-        .limit(1);
+        .limit(200);
 
-      if (conflict && conflict.length > 0) {
+      const hasOverlap = (conflict || []).some((row: any) =>
+        doTimeWindowsOverlap(
+          String(row.time || ""),
+          getBookingDurationMinutes(availabilityConfig, row),
+          bookingTime,
+          requestedDurationMinutes,
+        ),
+      );
+
+      if (hasOverlap) {
         return c.json(
           { error: "The selected doctor already has a booking at this time" },
           409,
@@ -3103,6 +3352,9 @@ app.get("/make-server-34100c2d/available-doctors", requireAuth, async (c) => {
     const date = c.req.query("date") || "";
     const time = c.req.query("time") || "";
     const serviceType = String(c.req.query("serviceType") || "").trim();
+    const practitionerType = String(
+      c.req.query("practitionerType") || "",
+    ).trim();
 
     if (!date || !time) {
       return c.json({ error: "date and time query params required" }, 400);
@@ -3116,6 +3368,7 @@ app.get("/make-server-34100c2d/available-doctors", requireAuth, async (c) => {
         supabase,
         {
           serviceType,
+          practitionerType,
           bookingDatePart,
           bookingTime: time,
         },
@@ -3165,6 +3418,9 @@ app.get("/make-server-34100c2d/eligible-doctors", async (c) => {
     const date = String(c.req.query("date") || "").trim();
     const time = String(c.req.query("time") || "").trim();
     const serviceType = String(c.req.query("serviceType") || "").trim();
+    const practitionerType = String(
+      c.req.query("practitionerType") || "",
+    ).trim();
 
     if (!date || !time || !serviceType) {
       return c.json(
@@ -3185,6 +3441,7 @@ app.get("/make-server-34100c2d/eligible-doctors", async (c) => {
       supabase,
       {
         serviceType,
+        practitionerType,
         bookingDatePart,
         bookingTime,
       },
@@ -4156,24 +4413,32 @@ app.get(
 app.get("/make-server-34100c2d/booked-slots/:date", async (c) => {
   try {
     const dateParam = c.req.param("date");
-    const requestDate = new Date(dateParam).toISOString().split("T")[0];
+    const requestedServiceType = normalizeServiceTypeValue(
+      c.req.query("serviceType") || "",
+    );
+    const requestDate = getDatePartFromIso(dateParam);
+
+    if (!requestDate) {
+      return c.json({ error: "Invalid date" }, 400);
+    }
 
     const supabase = getSupabaseClient();
     await releaseExpiredUncheckedInBookings(supabase);
+    const availabilityConfig = await fetchAvailabilityConfigFromDb(supabase);
 
     const [
       { data: bookings, error },
-      { count: availableDoctorCount, error: doctorsError },
+      { data: activeDoctors, error: doctorsError },
     ] = await Promise.all([
       supabase
         .from("bookings")
-        .select("time")
+        .select("time, service_type, practitioner_type")
         .gte("date", `${requestDate}T00:00:00`)
         .lt("date", `${requestDate}T23:59:59`)
-        .eq("status", "confirmed"),
+        .in("status", ["pending", "confirmed", "completed"]),
       supabase
         .from("admin_users")
-        .select("id", { count: "exact", head: true })
+        .select("id")
         .eq("role", "doctor")
         .eq("is_available", true),
     ]);
@@ -4182,18 +4447,65 @@ app.get("/make-server-34100c2d/booked-slots/:date", async (c) => {
       throw error || doctorsError;
     }
 
-    const slotCounts = new Map<string, number>();
-    for (const booking of bookings || []) {
-      const slot = booking.time;
-      slotCounts.set(slot, (slotCounts.get(slot) || 0) + 1);
+    const activeDoctorIds = (activeDoctors || [])
+      .map((doctor: any) => Number(doctor.id))
+      .filter((id: number) => Number.isInteger(id));
+
+    let serviceScopedDoctorIds = new Set<number>(activeDoctorIds);
+
+    if (requestedServiceType) {
+      if (
+        availabilityConfig.services?.[requestedServiceType]?.enabled === false
+      ) {
+        serviceScopedDoctorIds = new Set<number>();
+      } else if (activeDoctorIds.length > 0) {
+        const { data: assignmentRows, error: assignmentError } = await supabase
+          .from("doctor_service_assignments")
+          .select("doctor_id")
+          .eq("service_type", requestedServiceType)
+          .in("doctor_id", activeDoctorIds);
+
+        if (assignmentError) {
+          if (String((assignmentError as any)?.code || "") !== "42P01") {
+            throw assignmentError;
+          }
+        } else {
+          serviceScopedDoctorIds = new Set(
+            (assignmentRows || [])
+              .map((row: any) => Number(row.doctor_id))
+              .filter((id: number) => Number.isInteger(id)),
+          );
+        }
+      }
     }
 
-    const availableCount = Number(availableDoctorCount || 0);
+    const slotCounts = new Map<string, number>();
+    for (const booking of bookings || []) {
+      const durationMinutes = getBookingDurationMinutes(
+        availabilityConfig,
+        booking,
+      );
+      const slots = getTimeWindowSlots(
+        String(booking?.time || ""),
+        durationMinutes,
+      );
+
+      for (const slot of slots) {
+        slotCounts.set(slot, (slotCounts.get(slot) || 0) + 1);
+      }
+    }
+
+    const availableCount = serviceScopedDoctorIds.size;
     const bookedSlots = Array.from(slotCounts.entries())
       .filter(([, count]) => availableCount > 0 && count >= availableCount)
       .map(([slot]) => slot);
 
-    return c.json({ success: true, bookedSlots });
+    return c.json({
+      success: true,
+      bookedSlots,
+      availableDoctorCount: availableCount,
+      slotCounts: Object.fromEntries(slotCounts.entries()),
+    });
   } catch (error) {
     console.error("Get booked slots error:", error);
     return c.json(

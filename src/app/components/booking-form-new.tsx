@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { Label } from "./ui/label";
@@ -10,9 +10,6 @@ import {
   Calendar as CalendarIcon,
   Clock,
   Stethoscope,
-  Activity,
-  Zap,
-  Heart,
   X,
   ArrowLeft,
 } from "lucide-react";
@@ -21,14 +18,19 @@ import { format } from "date-fns";
 import { toast } from "sonner";
 import { supabaseAdminApiBaseUrls } from "../../../utils/supabase/client";
 import {
+  BASE_SLOT_MINUTES,
   DEFAULT_AVAILABILITY_CONFIG,
   fetchAvailabilityConfig,
+  fetchServiceCatalog,
+  getPractitionerDurationMinutes,
   getAvailableTimeSlots,
   getOperatingHoursForDate,
+  getSlotWindowTimes,
   isDateBookable,
   isPractitionerEnabled,
   isServiceEnabled,
   isTimeWithinOperatingHours,
+  SERVICE_CATALOG,
 } from "../lib/availability";
 import logo from "../../assets/cadae8615ee9587c8f09fa141332814475e43e29.png";
 
@@ -56,145 +58,27 @@ interface FormData {
   medicalAidNumber: string;
 }
 
-const SERVICES = [
-  {
-    id: "dental",
-    title: "Dental Care",
-    description: "Checkups, cleanings, fillings & more",
-    icon: Activity,
-    color: "text-blue-600",
-    bgColor: "bg-blue-50",
-  },
-  {
-    id: "medical",
-    title: "General Medicine",
-    description: "Primary healthcare services",
-    icon: Stethoscope,
-    color: "text-red-600",
-    bgColor: "bg-red-50",
-  },
-  {
-    id: "iv-therapy",
-    title: "IV Drip Therapy",
-    description: "Wellness & recovery treatments",
-    icon: Zap,
-    color: "text-yellow-600",
-    bgColor: "bg-yellow-50",
-  },
-  {
-    id: "physiotherapy",
-    title: "Physiotherapy",
-    description: "Rehabilitation & pain management",
-    icon: Heart,
-    color: "text-green-600",
-    bgColor: "bg-green-50",
-  },
+const SERVICE_VISUALS = [
+  { color: "text-blue-600", bgColor: "bg-blue-50" },
+  { color: "text-red-600", bgColor: "bg-red-50" },
+  { color: "text-emerald-600", bgColor: "bg-emerald-50" },
+  { color: "text-amber-600", bgColor: "bg-amber-50" },
 ];
 
-const PRACTITIONERS = {
-  dental: [
-    {
-      id: "general-dentist",
-      title: "General Dentistry",
-      icon: Activity,
-      description: "Regular dental care",
-    },
-    {
-      id: "dental-therapist",
-      title: "Dental Therapist",
-      icon: Activity,
-      description: "Preventive care",
-    },
-    {
-      id: "emergency",
-      title: "Emergency Dental",
-      icon: Zap,
-      description: "Urgent care",
-    },
-    {
-      id: "not-sure",
-      title: "I'm not sure",
-      icon: Stethoscope,
-      description: "We'll help you decide",
-    },
-  ],
-  medical: [
-    {
-      id: "general-practitioner",
-      title: "General Practitioner",
-      icon: Stethoscope,
-      description: "Primary care doctor",
-    },
-    {
-      id: "clinical-associate",
-      title: "Clinical Associate",
-      icon: Stethoscope,
-      description: "Medical professional",
-    },
-    {
-      id: "not-sure",
-      title: "I'm not sure",
-      icon: Stethoscope,
-      description: "We'll help you decide",
-    },
-  ],
-  "iv-therapy": [
-    {
-      id: "hydration",
-      title: "Hydration Therapy",
-      icon: Zap,
-      description: "Rehydration treatment",
-    },
-    {
-      id: "vitamin-boost",
-      title: "Vitamin Boost",
-      icon: Zap,
-      description: "Energy & wellness",
-    },
-    {
-      id: "immunity",
-      title: "Immunity Support",
-      icon: Heart,
-      description: "Strengthen immune system",
-    },
-    {
-      id: "consultation",
-      title: "General Consultation",
-      icon: Stethoscope,
-      description: "Discuss options",
-    },
-  ],
-  physiotherapy: [
-    {
-      id: "sports-injury",
-      title: "Sports Injury",
-      icon: Heart,
-      description: "Athletic recovery",
-    },
-    {
-      id: "pain-management",
-      title: "Pain Management",
-      icon: Heart,
-      description: "Chronic pain relief",
-    },
-    {
-      id: "rehabilitation",
-      title: "Rehabilitation",
-      icon: Activity,
-      description: "Recovery therapy",
-    },
-    {
-      id: "not-sure",
-      title: "I'm not sure",
-      icon: Stethoscope,
-      description: "We'll help you decide",
-    },
-  ],
+const DEFAULT_PRACTITIONER = {
+  id: "not-sure",
+  title: "I'm not sure",
+  durationMinutes: BASE_SLOT_MINUTES,
+  icon: Stethoscope,
+  description: "We'll match you with the right person",
 };
 
 export function BookingFormNew({ onClose }: BookingFormNewProps) {
   const [step, setStep] = useState(1);
   const [bookedSlots, setBookedSlots] = useState<string[]>([]);
+  const [slotCounts, setSlotCounts] = useState<Record<string, number>>({});
+  const [availableDoctorCount, setAvailableDoctorCount] = useState(0);
+  const [serviceCatalog, setServiceCatalog] = useState(SERVICE_CATALOG);
   const [availabilityConfig, setAvailabilityConfig] = useState(
     DEFAULT_AVAILABILITY_CONFIG,
   );
@@ -214,18 +98,118 @@ export function BookingFormNew({ onClose }: BookingFormNewProps) {
     medicalAidNumber: "",
   });
 
-  const availableServices = SERVICES.filter((service) =>
-    isServiceEnabled(availabilityConfig, service.id),
+  const availableServices = useMemo(
+    () =>
+      serviceCatalog.filter((service) =>
+        isServiceEnabled(availabilityConfig, service.id),
+      ),
+    [availabilityConfig, serviceCatalog],
   );
-  const availablePractitioners = (
-    PRACTITIONERS[formData.serviceType as keyof typeof PRACTITIONERS] || []
-  ).filter((practitioner) =>
-    isPractitionerEnabled(
+
+  const selectedService = useMemo(
+    () => serviceCatalog.find((service) => service.id === formData.serviceType),
+    [formData.serviceType, serviceCatalog],
+  );
+
+  const availablePractitioners = useMemo(() => {
+    const practitioners =
+      selectedService && selectedService.practitioners.length > 0
+        ? selectedService.practitioners.map((practitioner) => ({
+            id: practitioner.id,
+            title: practitioner.title,
+            durationMinutes: practitioner.durationMinutes,
+            icon: practitioner.id === "not-sure" ? Stethoscope : Clock,
+            description:
+              practitioner.id === "not-sure"
+                ? "We'll help you decide"
+                : "Procedure option",
+          }))
+        : [DEFAULT_PRACTITIONER];
+
+    return practitioners.filter((practitioner) =>
+      isPractitionerEnabled(
+        availabilityConfig,
+        formData.serviceType,
+        practitioner.id,
+      ),
+    );
+  }, [availabilityConfig, formData.serviceType, selectedService]);
+
+  const selectedPractitioner = useMemo(
+    () =>
+      availablePractitioners.find(
+        (practitioner) => practitioner.id === formData.practitionerType,
+      ) || null,
+    [availablePractitioners, formData.practitionerType],
+  );
+
+  const selectedDurationMinutes = useMemo(() => {
+    if (selectedPractitioner?.durationMinutes) {
+      return selectedPractitioner.durationMinutes;
+    }
+
+    if (!formData.serviceType || !formData.practitionerType) {
+      return BASE_SLOT_MINUTES;
+    }
+
+    return getPractitionerDurationMinutes(
       availabilityConfig,
       formData.serviceType,
-      practitioner.id,
-    ),
-  );
+      formData.practitionerType,
+    );
+  }, [
+    availabilityConfig,
+    formData.practitionerType,
+    formData.serviceType,
+    selectedPractitioner,
+  ]);
+
+  const baseAvailableTimeSlots = formData.date
+    ? getAvailableTimeSlots(availabilityConfig, formData.date)
+    : [];
+
+  const selectableTimeSlots = formData.date
+    ? getAvailableTimeSlots(
+        availabilityConfig,
+        formData.date,
+        selectedDurationMinutes,
+      )
+    : [];
+
+  const selectedDayHours = formData.date
+    ? getOperatingHoursForDate(availabilityConfig, formData.date)
+    : null;
+
+  const isDurationWindowAvailable = (time: string, date: Date | undefined) => {
+    if (!date) {
+      return false;
+    }
+
+    const requiredSlots = getSlotWindowTimes(time, selectedDurationMinutes);
+
+    if (requiredSlots.length === 0) {
+      return false;
+    }
+
+    return requiredSlots.every((slot) => {
+      if (!baseAvailableTimeSlots.includes(slot)) {
+        return false;
+      }
+
+      if (isPastTimeSlot(slot, date)) {
+        return false;
+      }
+
+      const slotLoad = Number(slotCounts[slot] || 0);
+      const hasCapacityLimit = availableDoctorCount > 0;
+
+      if (!hasCapacityLimit) {
+        return !bookedSlots.includes(slot);
+      }
+
+      return slotLoad < availableDoctorCount;
+    });
+  };
 
   const getStartOfToday = () => {
     const today = new Date();
@@ -258,23 +242,15 @@ export function BookingFormNew({ onClose }: BookingFormNewProps) {
         availabilityConfig,
         formData.date,
         formData.time,
+        selectedDurationMinutes,
       )
     ) ||
-      bookedSlots.includes(formData.time) ||
-      isPastTimeSlot(formData.time, formData.date));
-
-  const availableTimeSlots = formData.date
-    ? getAvailableTimeSlots(availabilityConfig, formData.date)
-    : [];
-
-  const selectedDayHours = formData.date
-    ? getOperatingHoursForDate(availabilityConfig, formData.date)
-    : null;
+      !isDurationWindowAvailable(formData.time, formData.date));
 
   const canContinueStep3 =
     !!formData.date &&
     !!formData.time &&
-    availableTimeSlots.includes(formData.time) &&
+    selectableTimeSlots.includes(formData.time) &&
     !isSelectedTimeUnavailable;
 
   const toLocalDateString = (date: Date) => {
@@ -303,8 +279,12 @@ export function BookingFormNew({ onClose }: BookingFormNewProps) {
   useEffect(() => {
     const loadAvailability = async () => {
       setAvailabilityLoading(true);
-      const config = await fetchAvailabilityConfig();
+      const [config, catalog] = await Promise.all([
+        fetchAvailabilityConfig(),
+        fetchServiceCatalog(),
+      ]);
       setAvailabilityConfig(config);
+      setServiceCatalog(catalog);
       setAvailabilityLoading(false);
     };
 
@@ -359,6 +339,7 @@ export function BookingFormNew({ onClose }: BookingFormNewProps) {
     const nextAvailableSlots = getAvailableTimeSlots(
       availabilityConfig,
       formData.date,
+      selectedDurationMinutes,
     );
 
     if (formData.time && !nextAvailableSlots.includes(formData.time)) {
@@ -367,19 +348,30 @@ export function BookingFormNew({ onClose }: BookingFormNewProps) {
         time: "",
       }));
     }
-  }, [availabilityConfig, formData.date, formData.time]);
+  }, [
+    availabilityConfig,
+    formData.date,
+    formData.time,
+    selectedDurationMinutes,
+  ]);
 
   // Fetch booked slots when date changes
   useEffect(() => {
     if (formData.date) {
       fetchBookedSlots(formData.date);
     }
-  }, [formData.date]);
+  }, [formData.date, formData.practitionerType, formData.serviceType]);
 
   const fetchBookedSlots = async (date: Date) => {
     try {
       const requestDate = toLocalDateString(date);
-      const response = await apiFetchPublic(`/booked-slots/${requestDate}`);
+      const query = new URLSearchParams({
+        serviceType: formData.serviceType || "",
+        practitionerType: formData.practitionerType || "",
+      });
+      const response = await apiFetchPublic(
+        `/booked-slots/${requestDate}?${query.toString()}`,
+      );
 
       if (!response) {
         setBookedSlots([]);
@@ -388,9 +380,17 @@ export function BookingFormNew({ onClose }: BookingFormNewProps) {
 
       const data = await parseApiResponse(response, "Booked slots endpoint");
       setBookedSlots(Array.isArray(data.bookedSlots) ? data.bookedSlots : []);
+      setSlotCounts(
+        data.slotCounts && typeof data.slotCounts === "object"
+          ? data.slotCounts
+          : {},
+      );
+      setAvailableDoctorCount(Number(data.availableDoctorCount || 0));
     } catch (error) {
       console.log("Could not load booked slots from Admin API:", error);
       setBookedSlots([]);
+      setSlotCounts({});
+      setAvailableDoctorCount(0);
     }
   };
 
@@ -474,7 +474,7 @@ export function BookingFormNew({ onClose }: BookingFormNewProps) {
           formData.practitionerType,
         )
       ) {
-        toast.error("That practitioner is currently unavailable");
+        toast.error("That procedure/provider option is currently unavailable");
         setStep(2);
         return;
       }
@@ -490,9 +490,18 @@ export function BookingFormNew({ onClose }: BookingFormNewProps) {
           availabilityConfig,
           formData.date,
           formData.time,
+          selectedDurationMinutes,
         )
       ) {
         toast.error("That time is outside operating hours");
+        setStep(3);
+        return;
+      }
+
+      if (!isDurationWindowAvailable(formData.time, formData.date)) {
+        toast.error(
+          `This ${selectedDurationMinutes}-minute procedure overlaps an unavailable slot. Choose another time.`,
+        );
         setStep(3);
         return;
       }
@@ -556,10 +565,8 @@ export function BookingFormNew({ onClose }: BookingFormNewProps) {
       }
 
       // Get service and practitioner details
-      const service = SERVICES.find((s) => s.id === formData.serviceType);
-      const practitioner = PRACTITIONERS[
-        formData.serviceType as keyof typeof PRACTITIONERS
-      ]?.find((p) => p.id === formData.practitionerType);
+      const service = selectedService;
+      const practitioner = selectedPractitioner;
 
       // Format the date
       const formattedDate = formData.date
@@ -571,7 +578,7 @@ export function BookingFormNew({ onClose }: BookingFormNewProps) {
 
 *Service Details:*
 Service Type: ${service?.title || "N/A"}
-Practitioner: ${practitioner?.title || "N/A"}
+Procedure/Provider Option: ${practitioner?.title || "N/A"}
 
 *Appointment Date & Time:*
 Date: ${formattedDate}
@@ -703,7 +710,7 @@ This is an automated appointment request from dentxquarters.co.za`;
                   <div
                     className={`text-xs sm:text-sm font-medium whitespace-nowrap ${step >= 2 ? "text-[#9A7B1D]" : "text-gray-500"}`}
                   >
-                    Select Specialist
+                    Select Procedure / Provider
                   </div>
                 </div>
               </div>
@@ -777,8 +784,9 @@ This is an automated appointment request from dentxquarters.co.za`;
                   </div>
                 ) : (
                   <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 max-w-6xl mx-auto">
-                    {availableServices.map((service) => {
-                      const Icon = service.icon;
+                    {availableServices.map((service, serviceIndex) => {
+                      const visual =
+                        SERVICE_VISUALS[serviceIndex % SERVICE_VISUALS.length];
                       return (
                         <button
                           key={service.id}
@@ -793,15 +801,17 @@ This is an automated appointment request from dentxquarters.co.za`;
                           }`}
                         >
                           <div
-                            className={`w-16 h-16 mx-auto mb-4 rounded-2xl ${service.bgColor} flex items-center justify-center transition-transform group-hover:scale-110`}
+                            className={`w-16 h-16 mx-auto mb-4 rounded-2xl ${visual.bgColor} flex items-center justify-center transition-transform group-hover:scale-110`}
                           >
-                            <Icon className={`w-8 h-8 ${service.color}`} />
+                            <Stethoscope
+                              className={`w-8 h-8 ${visual.color}`}
+                            />
                           </div>
                           <h4 className="text-lg mb-2 text-gray-900">
                             {service.title}
                           </h4>
                           <p className="text-sm text-gray-600 leading-relaxed">
-                            {service.description}
+                            Estimated duration is included in the service name.
                           </p>
                         </button>
                       );
@@ -811,19 +821,19 @@ This is an automated appointment request from dentxquarters.co.za`;
               </div>
             )}
 
-            {/* Step 2: Select Practitioner Type */}
+            {/* Step 2: Select Procedure / Provider Option */}
             {step === 2 && formData.serviceType && (
               <div>
                 <h3 className="text-xl sm:text-2xl mb-2 text-[#2C3E50]">
-                  Step 2: Select a healthcare professional
+                  Step 2: Select a procedure or provider option
                 </h3>
                 <p className="text-gray-600 mb-6 sm:mb-8">
-                  Choose the type of specialist you'd like to see
+                  Choose the specific option for this service
                 </p>
 
                 {availablePractitioners.length === 0 ? (
                   <div className="max-w-2xl rounded-xl border border-amber-200 bg-amber-50 p-6 text-amber-800">
-                    No practitioners are currently available for this service.
+                    No options are currently available for this service.
                   </div>
                 ) : (
                   <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6 mb-6 sm:mb-8 max-w-6xl mx-auto">
@@ -912,32 +922,35 @@ This is an automated appointment request from dentxquarters.co.za`;
                     )}
                     {bookedSlots.length > 0 && (
                       <p className="text-sm text-gray-500 mb-2">
-                        {bookedSlots.length} slot(s) already booked for this
-                        date
+                        {bookedSlots.length} fully booked slot(s) on this date
                       </p>
                     )}
+                    <p className="text-xs text-gray-500 mb-2">
+                      Selected procedure duration: {selectedDurationMinutes} min
+                    </p>
                     {formData.date &&
-                      availableTimeSlots.length > 0 &&
-                      availableTimeSlots.every((time) => {
-                        const isBooked = bookedSlots.includes(time);
-                        const isPast = isPastTimeSlot(time, formData.date);
-                        return isBooked || isPast;
+                      selectableTimeSlots.length > 0 &&
+                      selectableTimeSlots.every((time) => {
+                        return !isDurationWindowAvailable(time, formData.date);
                       }) && (
                         <p className="text-sm text-amber-700 mb-2">
                           No remaining slots today. Please choose another date.
                         </p>
                       )}
-                    {formData.date && availableTimeSlots.length === 0 && (
+                    {formData.date && selectableTimeSlots.length === 0 && (
                       <p className="text-sm text-amber-700 mb-2">
                         This day is closed for online bookings. Please choose
                         another date.
                       </p>
                     )}
                     <div className="grid grid-cols-3 gap-3 max-h-[350px] overflow-y-auto pr-2">
-                      {availableTimeSlots.map((time) => {
+                      {selectableTimeSlots.map((time) => {
                         const isBooked = bookedSlots.includes(time);
                         const isPast = isPastTimeSlot(time, formData.date);
-                        const isUnavailable = isBooked || isPast;
+                        const isUnavailable = !isDurationWindowAvailable(
+                          time,
+                          formData.date,
+                        );
                         return (
                           <button
                             key={time}
@@ -965,7 +978,7 @@ This is an automated appointment request from dentxquarters.co.za`;
                             <span className="text-sm font-medium">{time}</span>
                             {isBooked && (
                               <span className="text-xs text-red-600 block mt-1">
-                                Booked
+                                Full
                               </span>
                             )}
                             {isPast && (
@@ -1120,21 +1133,13 @@ This is an automated appointment request from dentxquarters.co.za`;
                     <div className="flex justify-between items-center py-2 border-b border-[#E8E2D5]">
                       <span className="text-gray-600">Service:</span>
                       <span className="font-medium text-gray-900">
-                        {
-                          SERVICES.find((s) => s.id === formData.serviceType)
-                            ?.title
-                        }
+                        {selectedService?.title}
                       </span>
                     </div>
                     <div className="flex justify-between items-center py-2 border-b border-[#E8E2D5]">
-                      <span className="text-gray-600">Practitioner:</span>
+                      <span className="text-gray-600">Procedure/Provider:</span>
                       <span className="font-medium text-gray-900">
-                        {
-                          PRACTITIONERS[
-                            formData.serviceType as keyof typeof PRACTITIONERS
-                          ]?.find((p) => p.id === formData.practitionerType)
-                            ?.title
-                        }
+                        {selectedPractitioner?.title}
                       </span>
                     </div>
                     {formData.date && (

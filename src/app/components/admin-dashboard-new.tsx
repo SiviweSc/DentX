@@ -389,6 +389,7 @@ function AvailabilitySettingsPanel({
     const currentService = availabilityConfig.services[serviceId] || {
       enabled: true,
       practitioners: {},
+      practitionerDurations: {},
     };
 
     const nextConfig = {
@@ -414,6 +415,7 @@ function AvailabilitySettingsPanel({
     const currentService = availabilityConfig.services[serviceId] || {
       enabled: true,
       practitioners: {},
+      practitionerDurations: {},
     };
 
     const nextConfig = {
@@ -434,6 +436,38 @@ function AvailabilitySettingsPanel({
     await persistAvailability(
       nextConfig,
       `practitioner:${serviceId}:${practitionerId}`,
+    );
+  };
+
+  const updatePractitionerDuration = async (
+    serviceId: string,
+    practitionerId: string,
+    durationMinutes: number,
+  ) => {
+    const currentService = availabilityConfig.services[serviceId] || {
+      enabled: true,
+      practitioners: {},
+      practitionerDurations: {},
+    };
+
+    const nextConfig = {
+      ...availabilityConfig,
+      services: {
+        ...availabilityConfig.services,
+        [serviceId]: {
+          ...currentService,
+          practitionerDurations: {
+            ...currentService.practitionerDurations,
+            [practitionerId]: durationMinutes,
+          },
+        },
+      },
+    };
+
+    setAvailabilityConfig(nextConfig);
+    await persistAvailability(
+      nextConfig,
+      `duration:${serviceId}:${practitionerId}`,
     );
   };
 
@@ -601,6 +635,7 @@ function AvailabilitySettingsPanel({
                   ] || {
                     enabled: true,
                     practitioners: {},
+                    practitionerDurations: {},
                   };
 
                   return (
@@ -654,6 +689,36 @@ function AvailabilitySettingsPanel({
                               </p>
                             </div>
                             <div className="flex items-center gap-3">
+                              <div className="flex items-center gap-2">
+                                <span className="text-xs text-gray-500">
+                                  Duration
+                                </span>
+                                <select
+                                  value={
+                                    serviceConfig.practitionerDurations?.[
+                                      practitioner.id
+                                    ] ?? 30
+                                  }
+                                  disabled={
+                                    !serviceConfig.enabled ||
+                                    savingKey ===
+                                      `duration:${service.id}:${practitioner.id}`
+                                  }
+                                  onChange={(e) =>
+                                    void updatePractitionerDuration(
+                                      service.id,
+                                      practitioner.id,
+                                      Number(e.target.value),
+                                    )
+                                  }
+                                  className="rounded-md border border-gray-300 bg-white px-2 py-1 text-xs focus:outline-none focus:ring-2 focus:ring-[#9A7B1D]"
+                                >
+                                  <option value={30}>30 min</option>
+                                  <option value={60}>60 min</option>
+                                  <option value={90}>90 min</option>
+                                  <option value={120}>120 min</option>
+                                </select>
+                              </div>
                               <Badge
                                 className={
                                   serviceConfig.practitioners[

@@ -3,6 +3,7 @@ import { supabaseAdminApiBaseUrls } from "../../../utils/supabase/client";
 export interface PractitionerCatalogItem {
   id: string;
   title: string;
+  durationMinutes?: number;
 }
 
 export interface ServiceCatalogItem {
@@ -14,6 +15,7 @@ export interface ServiceCatalogItem {
 export interface AvailabilityServiceConfig {
   enabled: boolean;
   practitioners: Record<string, boolean>;
+  practitionerDurations: Record<string, number>;
 }
 
 export type OperatingDayKey =
@@ -35,6 +37,27 @@ export interface AvailabilityConfig {
   services: Record<string, AvailabilityServiceConfig>;
   operatingHours: Record<OperatingDayKey, OperatingHoursDayConfig>;
 }
+
+export const DEFAULT_APPOINTMENT_DURATION_MINUTES = 30;
+export const BASE_SLOT_MINUTES = 30;
+
+const normalizeDurationMinutes = (
+  value: unknown,
+  fallback = DEFAULT_APPOINTMENT_DURATION_MINUTES,
+) => {
+  const numeric = Number(value);
+
+  if (!Number.isFinite(numeric) || numeric <= 0) {
+    return fallback;
+  }
+
+  const roundedToSlot = Math.max(
+    BASE_SLOT_MINUTES,
+    Math.round(numeric / BASE_SLOT_MINUTES) * BASE_SLOT_MINUTES,
+  );
+
+  return roundedToSlot;
+};
 
 export const OPERATING_DAYS: Array<{
   key: OperatingDayKey;
@@ -89,9 +112,76 @@ export const SERVICE_CATALOG: ServiceCatalogItem[] = [
     id: "dental",
     title: "Dental Care",
     practitioners: [
-      { id: "general-dentist", title: "General Dentistry" },
-      { id: "dental-therapist", title: "Dental Therapist" },
-      { id: "emergency", title: "Emergency Dental" },
+      {
+        id: "slim-wires-bite-blocks",
+        title: "Slim wires/Bite blocks (1 Hour)",
+        durationMinutes: 60,
+      },
+      {
+        id: "ortho-review-brace-check-up",
+        title: "Ortho review / Brace check up (30 Min)",
+        durationMinutes: 30,
+      },
+      {
+        id: "consultation-brace-consultation",
+        title: "Consultation / Brace consultation (30 Min)",
+        durationMinutes: 30,
+      },
+      {
+        id: "crown-denture-consult",
+        title: "Crown / Denture consult (30 Min)",
+        durationMinutes: 30,
+      },
+      {
+        id: "crown-installation",
+        title: "Crown installation (2 Hours)",
+        durationMinutes: 120,
+      },
+      {
+        id: "brace-removal-slim-wire-or-bite-blocks-removal",
+        title: "Brace removal / Slim wire or Bite blocks removal (1 Hour)",
+        durationMinutes: 60,
+      },
+      {
+        id: "teeth-filling",
+        title: "Teeth filling (1 Hour)",
+        durationMinutes: 60,
+      },
+      {
+        id: "gold-silver-removal",
+        title: "Gold / silver removal (1 Hour)",
+        durationMinutes: 60,
+      },
+      {
+        id: "teeth-cleaning",
+        title: "Teeth cleaning (30 Min)",
+        durationMinutes: 30,
+      },
+      {
+        id: "teeth-whitening",
+        title: "Teeth whitening (1 Hour 30 Min)",
+        durationMinutes: 90,
+      },
+      {
+        id: "root-canal-treatment",
+        title: "Root canal treatment (1 Hour)",
+        durationMinutes: 60,
+      },
+      {
+        id: "normal-extraction",
+        title: "Normal extraction (30 Min)",
+        durationMinutes: 30,
+      },
+      {
+        id: "surgical-extraction",
+        title: "Surgical extraction (1 Hour)",
+        durationMinutes: 60,
+      },
+      {
+        id: "brace-installation",
+        title: "Brace installation (1 Hour)",
+        durationMinutes: 60,
+      },
       { id: "not-sure", title: "I'm not sure" },
     ],
   },
@@ -99,29 +189,41 @@ export const SERVICE_CATALOG: ServiceCatalogItem[] = [
     id: "medical",
     title: "General Medicine",
     practitioners: [
-      { id: "general-practitioner", title: "General Practitioner" },
-      { id: "clinical-associate", title: "Clinical Associate" },
-      { id: "not-sure", title: "I'm not sure" },
+      {
+        id: "general-practitioner",
+        title: "General Practitioner",
+        durationMinutes: 30,
+      },
+      {
+        id: "clinical-associate",
+        title: "Clinical Associate",
+        durationMinutes: 30,
+      },
+      { id: "not-sure", title: "I'm not sure", durationMinutes: 30 },
     ],
   },
   {
     id: "iv-therapy",
     title: "IV Drip Therapy",
     practitioners: [
-      { id: "hydration", title: "Hydration Therapy" },
-      { id: "vitamin-boost", title: "Vitamin Boost" },
-      { id: "immunity", title: "Immunity Support" },
-      { id: "consultation", title: "General Consultation" },
+      { id: "hydration", title: "Hydration Therapy", durationMinutes: 30 },
+      { id: "vitamin-boost", title: "Vitamin Boost", durationMinutes: 30 },
+      { id: "immunity", title: "Immunity Support", durationMinutes: 30 },
+      {
+        id: "consultation",
+        title: "General Consultation",
+        durationMinutes: 30,
+      },
     ],
   },
   {
     id: "physiotherapy",
     title: "Physiotherapy",
     practitioners: [
-      { id: "sports-injury", title: "Sports Injury" },
-      { id: "pain-management", title: "Pain Management" },
-      { id: "rehabilitation", title: "Rehabilitation" },
-      { id: "not-sure", title: "I'm not sure" },
+      { id: "sports-injury", title: "Sports Injury", durationMinutes: 30 },
+      { id: "pain-management", title: "Pain Management", durationMinutes: 30 },
+      { id: "rehabilitation", title: "Rehabilitation", durationMinutes: 30 },
+      { id: "not-sure", title: "I'm not sure", durationMinutes: 30 },
     ],
   },
 ];
@@ -134,6 +236,12 @@ export const DEFAULT_AVAILABILITY_CONFIG: AvailabilityConfig = {
         enabled: true,
         practitioners: Object.fromEntries(
           service.practitioners.map((practitioner) => [practitioner.id, true]),
+        ),
+        practitionerDurations: Object.fromEntries(
+          service.practitioners.map((practitioner) => [
+            practitioner.id,
+            normalizeDurationMinutes(practitioner.durationMinutes),
+          ]),
         ),
       },
     ]),
@@ -267,12 +375,17 @@ export const normalizeAvailabilityConfig = (
     const incomingService =
       incomingServiceRaw && typeof incomingServiceRaw === "object"
         ? (incomingServiceRaw as AvailabilityServiceConfig)
-        : ({ enabled: true, practitioners: {} } as AvailabilityServiceConfig);
+        : ({
+            enabled: true,
+            practitioners: {},
+            practitionerDurations: {},
+          } as AvailabilityServiceConfig);
 
     if (!normalized.services[serviceId]) {
       normalized.services[serviceId] = {
         enabled: true,
         practitioners: {},
+        practitionerDurations: {},
       };
     }
 
@@ -294,6 +407,19 @@ export const normalizeAvailabilityConfig = (
           practitionerEnabled;
       }
     }
+
+    const incomingDurations =
+      incomingService.practitionerDurations &&
+      typeof incomingService.practitionerDurations === "object"
+        ? incomingService.practitionerDurations
+        : {};
+
+    for (const [practitionerId, durationMinutes] of Object.entries(
+      incomingDurations,
+    )) {
+      normalized.services[serviceId].practitionerDurations[practitionerId] =
+        normalizeDurationMinutes(durationMinutes);
+    }
   }
 
   for (const service of SERVICE_CATALOG) {
@@ -308,6 +434,14 @@ export const normalizeAvailabilityConfig = (
       if (typeof enabled === "boolean") {
         normalized.services[service.id].practitioners[practitioner.id] =
           enabled;
+      }
+
+      const durationMinutes =
+        serviceConfig?.practitionerDurations?.[practitioner.id];
+
+      if (typeof durationMinutes === "number") {
+        normalized.services[service.id].practitionerDurations[practitioner.id] =
+          normalizeDurationMinutes(durationMinutes);
       }
     }
   }
@@ -394,6 +528,10 @@ export const fetchServiceCatalog = async (): Promise<ServiceCatalogItem[]> => {
                   title:
                     String(practitioner?.title || "").trim() ||
                     formatLabelFromSlug(practitionerId),
+                  durationMinutes: normalizeDurationMinutes(
+                    practitioner?.durationMinutes ??
+                      practitioner?.duration_minutes,
+                  ),
                 };
               })
               .filter(Boolean)
@@ -453,3 +591,40 @@ export const isPractitionerEnabled = (
 ) =>
   isServiceEnabled(config, serviceId) &&
   config.services[serviceId]?.practitioners?.[practitionerId] !== false;
+
+export const getPractitionerDurationMinutes = (
+  config: AvailabilityConfig,
+  serviceId: string,
+  practitionerId: string,
+) =>
+  normalizeDurationMinutes(
+    config.services?.[serviceId]?.practitionerDurations?.[practitionerId],
+  );
+
+export const getRequiredSlotCount = (durationMinutes: number) =>
+  Math.max(
+    1,
+    Math.ceil(normalizeDurationMinutes(durationMinutes) / BASE_SLOT_MINUTES),
+  );
+
+export const getSlotWindowTimes = (
+  startTime: string,
+  durationMinutes: number,
+) => {
+  const startMinutes = timeStringToMinutes(startTime);
+  if (startMinutes === null) {
+    return [];
+  }
+
+  const slotCount = getRequiredSlotCount(durationMinutes);
+  const times: string[] = [];
+
+  for (let i = 0; i < slotCount; i += 1) {
+    const current = startMinutes + i * BASE_SLOT_MINUTES;
+    const hours = String(Math.floor(current / 60)).padStart(2, "0");
+    const minutes = String(current % 60).padStart(2, "0");
+    times.push(`${hours}:${minutes}`);
+  }
+
+  return times;
+};

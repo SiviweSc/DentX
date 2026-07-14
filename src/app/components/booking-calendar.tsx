@@ -24,15 +24,19 @@ import {
   Check,
   ChevronLeft,
   ChevronRight,
+  Maximize2,
+  Minimize2,
   Plus,
   RefreshCw,
 } from "lucide-react";
 import { toast } from "sonner";
 import {
+  BASE_SLOT_MINUTES,
   DEFAULT_AVAILABILITY_CONFIG,
   fetchAvailabilityConfig,
   fetchServiceCatalog,
   getAvailableTimeSlots,
+  getPractitionerDurationMinutes,
   isDateBookable,
   isPractitionerEnabled,
   isServiceEnabled,
@@ -263,6 +267,8 @@ export function BookingCalendar({
   const [rescheduleDate, setRescheduleDate] = useState("");
   const [rescheduleTime, setRescheduleTime] = useState("");
   const [currentDate, setCurrentDate] = useState(new Date());
+  const [isCalendarHeaderCollapsed, setIsCalendarHeaderCollapsed] =
+    useState(true);
   const [createBookingForm, setCreateBookingForm] =
     useState<CreateBookingForm>(INITIAL_CREATE_FORM);
   const [creatingBooking, setCreatingBooking] = useState(false);
@@ -394,8 +400,21 @@ export function BookingCalendar({
           const [hours, minutes] = booking.time.split(":").map(Number);
           bookingDate.setHours(hours, minutes, 0, 0);
 
+          const serviceType = String(booking.service_type || "").trim();
+          const practitionerType = String(
+            booking.practitioner_type || "",
+          ).trim();
+          const durationMinutes =
+            serviceType && practitionerType
+              ? getPractitionerDurationMinutes(
+                  availabilityConfig,
+                  serviceType,
+                  practitionerType,
+                )
+              : BASE_SLOT_MINUTES;
+
           const endTime = new Date(bookingDate);
-          endTime.setMinutes(endTime.getMinutes() + 30);
+          endTime.setMinutes(endTime.getMinutes() + durationMinutes);
 
           return {
             id: booking.id,
@@ -1238,99 +1257,126 @@ export function BookingCalendar({
   }
 
   return (
-    <div className="h-full flex flex-col">
-      <div className="mb-4 flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-        <div>
-          <h2 className="text-lg sm:text-xl font-semibold text-gray-900">
-            Weekly Calendar
-          </h2>
-          <p className="text-xs sm:text-sm text-gray-600 mt-1">
-            One week per screen. Click an empty slot or cancelled booking to add
-            a new booking.
-          </p>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() =>
-              setCurrentDate(
-                new Date(
-                  currentDate.getFullYear(),
-                  currentDate.getMonth(),
-                  currentDate.getDate() - 7,
-                ),
-              )
-            }
-          >
-            <ChevronLeft className="w-4 h-4 mr-1" />
-            Prev Week
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => setCurrentDate(new Date())}
-          >
-            Today
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() =>
-              setCurrentDate(
-                new Date(
-                  currentDate.getFullYear(),
-                  currentDate.getMonth(),
-                  currentDate.getDate() + 7,
-                ),
-              )
-            }
-          >
-            Next Week
-            <ChevronRight className="w-4 h-4 ml-1" />
-          </Button>
-          <Button
-            size="sm"
-            className="bg-[#9A7B1D] hover:bg-[#7d6418]"
-            onClick={() =>
-              openCreateDialog(
-                toLocalDateString(new Date()),
-                getAvailableTimeSlots(availabilityConfig, new Date())[0] || "",
-              )
-            }
-          >
-            <Plus className="w-4 h-4 mr-1" />
-            Add Booking
-          </Button>
-        </div>
-      </div>
+    <div className="h-full flex flex-col relative">
+      <Button
+        size="icon"
+        variant="outline"
+        onClick={() => setIsCalendarHeaderCollapsed((previous) => !previous)}
+        aria-expanded={!isCalendarHeaderCollapsed}
+        aria-label={
+          isCalendarHeaderCollapsed
+            ? "Expand calendar header"
+            : "Collapse calendar header"
+        }
+        title={
+          isCalendarHeaderCollapsed ? "Expand controls" : "Collapse controls"
+        }
+        className="absolute right-2 top-2 z-20 h-8 w-8 rounded-full border border-[#d9c78d] bg-[#f9f4e6] text-[#6f5714] shadow-sm hover:bg-[#f0e5c4]"
+      >
+        {isCalendarHeaderCollapsed ? (
+          <Maximize2 className="w-3.5 h-3.5" />
+        ) : (
+          <Minimize2 className="w-3.5 h-3.5" />
+        )}
+      </Button>
 
-      <div className="mb-4 flex flex-col gap-3 rounded-lg border border-gray-200 bg-white p-3 sm:flex-row sm:items-center sm:justify-between">
-        <div className="text-sm font-medium text-gray-900">
-          {getWeekRangeLabel(currentDate)}
-        </div>
-        <div className="flex flex-wrap gap-3 text-xs sm:text-sm text-gray-600">
-          <div className="flex items-center gap-2">
-            <div className="w-3 h-3 rounded bg-green-500"></div>
-            <span>Confirmed</span>
+      {!isCalendarHeaderCollapsed && (
+        <>
+          <div className="mb-4 pr-12 flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+            <div>
+              <h2 className="text-lg sm:text-xl font-semibold text-gray-900">
+                Weekly Calendar
+              </h2>
+              <p className="text-xs sm:text-sm text-gray-600 mt-1">
+                One week per screen. Click an empty slot or cancelled booking to
+                add a new booking.
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() =>
+                  setCurrentDate(
+                    new Date(
+                      currentDate.getFullYear(),
+                      currentDate.getMonth(),
+                      currentDate.getDate() - 7,
+                    ),
+                  )
+                }
+              >
+                <ChevronLeft className="w-4 h-4 mr-1" />
+                Prev Week
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setCurrentDate(new Date())}
+              >
+                Today
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() =>
+                  setCurrentDate(
+                    new Date(
+                      currentDate.getFullYear(),
+                      currentDate.getMonth(),
+                      currentDate.getDate() + 7,
+                    ),
+                  )
+                }
+              >
+                Next Week
+                <ChevronRight className="w-4 h-4 ml-1" />
+              </Button>
+              <Button
+                size="sm"
+                className="bg-[#9A7B1D] hover:bg-[#7d6418]"
+                onClick={() =>
+                  openCreateDialog(
+                    toLocalDateString(new Date()),
+                    getAvailableTimeSlots(availabilityConfig, new Date())[0] ||
+                      "",
+                  )
+                }
+              >
+                <Plus className="w-4 h-4 mr-1" />
+                Add Booking
+              </Button>
+            </div>
           </div>
-          <div className="flex items-center gap-2">
-            <div className="w-3 h-3 rounded bg-amber-500"></div>
-            <span>Pending</span>
+
+          <div className="mb-4 flex flex-col gap-3 rounded-lg border border-gray-200 bg-white p-3 sm:flex-row sm:items-center sm:justify-between">
+            <div className="text-sm font-medium text-gray-900">
+              {getWeekRangeLabel(currentDate)}
+            </div>
+            <div className="flex flex-wrap gap-3 text-xs sm:text-sm text-gray-600">
+              <div className="flex items-center gap-2">
+                <div className="w-3 h-3 rounded bg-green-500"></div>
+                <span>Confirmed</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="w-3 h-3 rounded bg-amber-500"></div>
+                <span>Pending</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="w-3 h-3 rounded bg-indigo-500"></div>
+                <span>Completed</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="w-3 h-3 rounded border border-dashed border-rose-400 bg-rose-50"></div>
+                <span>Cancelled slot available</span>
+              </div>
+            </div>
           </div>
-          <div className="flex items-center gap-2">
-            <div className="w-3 h-3 rounded bg-indigo-500"></div>
-            <span>Completed</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <div className="w-3 h-3 rounded border border-dashed border-rose-400 bg-rose-50"></div>
-            <span>Cancelled slot available</span>
-          </div>
-        </div>
-      </div>
+        </>
+      )}
 
       <div className="flex-1 overflow-x-auto rounded-lg border border-gray-200 bg-white">
-        <div className="min-w-[980px] h-[780px] [&_.rbc-time-view]:border-0 [&_.rbc-time-header-content]:border-l-0 [&_.rbc-time-content]:border-t [&_.rbc-timeslot-group]:min-h-[96px] [&_.rbc-toolbar]:hidden [&_.rbc-event]:shadow-none [&_.rbc-event]:min-h-[84px] [&_.rbc-event-label]:hidden [&_.rbc-event-content]:h-full [&_.rbc-event-content]:overflow-hidden [&_.rbc-time-slot]:text-xs [&_.rbc-header]:py-3 [&_.rbc-header]:text-sm [&_.rbc-header]:font-semibold [&_.rbc-today]:bg-[#faf7ef] [&_.rbc-current-time-indicator]:bg-[#9A7B1D]">
+        <div className="min-w-[980px] h-[1160px] [&_.rbc-time-view]:border-0 [&_.rbc-time-header-content]:border-l-0 [&_.rbc-time-content]:border-t [&_.rbc-timeslot-group]:min-h-[160px] [&_.rbc-toolbar]:hidden [&_.rbc-event]:shadow-none [&_.rbc-event]:min-h-[144px] [&_.rbc-event-label]:hidden [&_.rbc-event-content]:h-full [&_.rbc-event-content]:overflow-hidden [&_.rbc-time-slot]:text-xs [&_.rbc-header]:py-3 [&_.rbc-header]:text-sm [&_.rbc-header]:font-semibold [&_.rbc-today]:bg-[#faf7ef] [&_.rbc-current-time-indicator]:bg-[#9A7B1D]">
           <BigCalendar
             localizer={localizer}
             events={events}
