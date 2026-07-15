@@ -137,6 +137,55 @@ function getDatePart(value: string) {
   return value.slice(0, 10);
 }
 
+function normalizePhoneValue(value: string) {
+  return String(value || "")
+    .replace(/\s+/g, "")
+    .replace(/[^\d+]/g, "");
+}
+
+function getBookingStatusPriority(status: string) {
+  switch (String(status || "").toLowerCase()) {
+    case "completed":
+      return 4;
+    case "confirmed":
+      return 3;
+    case "pending":
+      return 2;
+    case "cancelled":
+      return 1;
+    default:
+      return 0;
+  }
+}
+
+function getCalendarDuplicateKey(booking: any) {
+  const bookingDate = getDatePart(String(booking?.date || ""));
+  const bookingTime = String(booking?.time || "").trim();
+  const normalizedPhone = normalizePhoneValue(booking?.phone || "");
+
+  if (!bookingDate || !bookingTime || !normalizedPhone) {
+    return null;
+  }
+
+  return `${bookingDate}::${bookingTime}::${normalizedPhone}`;
+}
+
+function shouldReplaceCalendarDuplicate(currentBooking: any, nextBooking: any) {
+  const currentPriority = getBookingStatusPriority(
+    currentBooking?.status || "",
+  );
+  const nextPriority = getBookingStatusPriority(nextBooking?.status || "");
+
+  if (nextPriority !== currentPriority) {
+    return nextPriority > currentPriority;
+  }
+
+  const currentCreatedAt = new Date(currentBooking?.created_at || 0).getTime();
+  const nextCreatedAt = new Date(nextBooking?.created_at || 0).getTime();
+
+  return nextCreatedAt > currentCreatedAt;
+}
+
 function combineDateAndTime(dateValue: string, timeValue: string) {
   const [year, month, day] = dateValue.split("-").map(Number);
   const [hours, minutes] = timeValue.split(":").map(Number);
@@ -160,6 +209,11 @@ function getWeekRangeLabel(currentDate: Date) {
 }
 
 function CalendarEventContent({ event }: { event: BookingEvent }) {
+  const eventDurationMinutes = Math.max(
+    0,
+    Math.round((event.end.getTime() - event.start.getTime()) / 60000),
+  );
+  const isShortEvent = eventDurationMinutes <= BASE_SLOT_MINUTES;
   const statusMeta: Record<
     string,
     { label: string; badgeBg: string; badgeColor: string }
@@ -194,24 +248,42 @@ function CalendarEventContent({ event }: { event: BookingEvent }) {
     } as const);
 
   return (
-    <div className="h-full min-w-0 overflow-hidden flex flex-col gap-1">
+    <div
+      className={`h-full min-w-0 overflow-hidden flex flex-col ${
+        isShortEvent ? "gap-0.5" : "gap-1"
+      }`}
+    >
       <div className="flex items-center justify-between gap-2">
-        <span className="text-[11px] font-semibold leading-none truncate">
+        <span
+          className={`${
+            isShortEvent ? "text-[10px]" : "text-[11px]"
+          } font-semibold leading-none truncate`}
+        >
           {event.time_str}
         </span>
         <span
-          className="text-[10px] font-semibold rounded px-1.5 py-0.5 leading-none shrink-0"
+          className={`font-semibold rounded px-1.5 py-0.5 leading-none shrink-0 ${
+            isShortEvent ? "text-[9px]" : "text-[10px]"
+          }`}
           style={{ backgroundColor: meta.badgeBg, color: meta.badgeColor }}
         >
           {meta.label}
         </span>
       </div>
 
-      <div className="text-xs font-bold leading-tight truncate">
+      <div
+        className={`${
+          isShortEvent ? "text-[11px]" : "text-xs"
+        } font-bold leading-tight truncate`}
+      >
         {event.first_name} {event.last_name}
       </div>
 
-      <div className="text-[11px] leading-tight truncate capitalize opacity-90">
+      <div
+        className={`${
+          isShortEvent ? "text-[10px]" : "text-[11px]"
+        } leading-tight truncate capitalize opacity-90`}
+      >
         {event.service_type?.replace(/-/g, " ")}
       </div>
 
@@ -394,51 +466,66 @@ export function BookingCalendar({
         return;
       }
 
-      const calendarEvents: BookingEvent[] = (bookingsData || []).map(
-        (booking) => {
-          const bookingDate = new Date(booking.date);
-          const [hours, minutes] = booking.time.split(":").map(Number);
-          bookingDate.setHours(hours, minutes, 0, 0);
+      const uniqueBookings = Array.from(
+        (bookingsData || [])
+          .reduce<Map<string, any>>((bookingMap, booking) => {
+            const duplicateKey = getCalendarDuplicateKey(booking);
+            const entryKey = duplicateKey || `booking:${booking.id}`;
+            const existingBooking = bookingMap.get(entryKey);
 
-          const serviceType = String(booking.service_type || "").trim();
-          const practitionerType = String(
-            booking.practitioner_type || "",
-          ).trim();
-          const durationMinutes =
-            serviceType && practitionerType
-              ? getPractitionerDurationMinutes(
-                  availabilityConfig,
-                  serviceType,
-                  practitionerType,
-                )
-              : BASE_SLOT_MINUTES;
+            if (
+              !existingBooking ||
+              shouldReplaceCalendarDuplicate(existingBooking, booking)
+            ) {
+              bookingMap.set(entryKey, booking);
+            }
 
-          const endTime = new Date(bookingDate);
-          endTime.setMinutes(endTime.getMinutes() + durationMinutes);
-
-          return {
-            id: booking.id,
-            title: `${booking.time} ${booking.first_name} ${booking.last_name}`,
-            start: bookingDate,
-            end: endTime,
-            date_str: booking.date,
-            time_str: booking.time,
-            status: booking.status || "pending",
-            service_type: booking.service_type,
-            practitioner_type: booking.practitioner_type,
-            first_name: booking.first_name,
-            last_name: booking.last_name,
-            phone: booking.phone,
-            email: booking.email,
-            reason: booking.reason,
-            medical_aid: booking.medical_aid,
-            medical_aid_number: booking.medical_aid_number,
-            id_number: booking.id_number,
-            created_at: booking.created_at,
-            assigned_doctor_username: booking.assigned_doctor_username,
-          };
-        },
+            return bookingMap;
+          }, new Map<string, any>())
+          .values(),
       );
+
+      const calendarEvents: BookingEvent[] = uniqueBookings.map((booking) => {
+        const bookingDate = new Date(booking.date);
+        const [hours, minutes] = booking.time.split(":").map(Number);
+        bookingDate.setHours(hours, minutes, 0, 0);
+
+        const serviceType = String(booking.service_type || "").trim();
+        const practitionerType = String(booking.practitioner_type || "").trim();
+        const durationMinutes =
+          serviceType && practitionerType
+            ? getPractitionerDurationMinutes(
+                availabilityConfig,
+                serviceType,
+                practitionerType,
+              )
+            : BASE_SLOT_MINUTES;
+
+        const endTime = new Date(bookingDate);
+        endTime.setMinutes(endTime.getMinutes() + durationMinutes);
+
+        return {
+          id: booking.id,
+          title: `${booking.time} ${booking.first_name} ${booking.last_name}`,
+          start: bookingDate,
+          end: endTime,
+          date_str: booking.date,
+          time_str: booking.time,
+          status: booking.status || "pending",
+          service_type: booking.service_type,
+          practitioner_type: booking.practitioner_type,
+          first_name: booking.first_name,
+          last_name: booking.last_name,
+          phone: booking.phone,
+          email: booking.email,
+          reason: booking.reason,
+          medical_aid: booking.medical_aid,
+          medical_aid_number: booking.medical_aid_number,
+          id_number: booking.id_number,
+          created_at: booking.created_at,
+          assigned_doctor_username: booking.assigned_doctor_username,
+        };
+      });
 
       setEvents(calendarEvents);
     } catch (err) {
@@ -1376,7 +1463,7 @@ export function BookingCalendar({
       )}
 
       <div className="flex-1 overflow-x-auto rounded-lg border border-gray-200 bg-white">
-        <div className="min-w-[980px] h-[1160px] [&_.rbc-time-view]:border-0 [&_.rbc-time-header-content]:border-l-0 [&_.rbc-time-content]:border-t [&_.rbc-timeslot-group]:min-h-[160px] [&_.rbc-toolbar]:hidden [&_.rbc-event]:shadow-none [&_.rbc-event]:min-h-[144px] [&_.rbc-event-label]:hidden [&_.rbc-event-content]:h-full [&_.rbc-event-content]:overflow-hidden [&_.rbc-time-slot]:text-xs [&_.rbc-header]:py-3 [&_.rbc-header]:text-sm [&_.rbc-header]:font-semibold [&_.rbc-today]:bg-[#faf7ef] [&_.rbc-current-time-indicator]:bg-[#9A7B1D]">
+        <div className="min-w-[980px] h-[1880px] [&_.rbc-time-view]:border-0 [&_.rbc-time-header-content]:border-l-0 [&_.rbc-time-content]:border-t [&_.rbc-timeslot-group]:min-h-[110px] [&_.rbc-toolbar]:hidden [&_.rbc-event]:box-border [&_.rbc-event]:shadow-none [&_.rbc-event]:min-h-0 [&_.rbc-event-label]:hidden [&_.rbc-event-content]:h-full [&_.rbc-event-content]:overflow-hidden [&_.rbc-day-slot_.rbc-time-slot]:min-h-[110px] [&_.rbc-time-slot]:text-xs [&_.rbc-header]:py-3 [&_.rbc-header]:text-sm [&_.rbc-header]:font-semibold [&_.rbc-today]:bg-[#faf7ef] [&_.rbc-current-time-indicator]:bg-[#9A7B1D]">
           <BigCalendar
             localizer={localizer}
             events={events}

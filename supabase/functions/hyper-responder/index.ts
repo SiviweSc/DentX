@@ -1692,6 +1692,24 @@ const isSameClientBooking = (candidate: any, incoming: any) => {
   );
 };
 
+const isSameSlotBookingIdentity = (candidate: any, incoming: any) => {
+  const candidateId = String(candidate?.id_number || "").trim();
+  const incomingId = String(
+    incoming?.idNumber || incoming?.id_number || "",
+  ).trim();
+
+  if (incomingId && candidateId && candidateId === incomingId) {
+    return true;
+  }
+
+  const incomingPhone = normalizePhoneValue(incoming?.phone || "");
+  const candidatePhone = normalizePhoneValue(candidate?.phone || "");
+
+  return Boolean(
+    incomingPhone && candidatePhone && incomingPhone === candidatePhone,
+  );
+};
+
 const normalizeAvailabilityConfig = (config: any) => {
   const normalized = JSON.parse(JSON.stringify(DEFAULT_AVAILABILITY_CONFIG));
 
@@ -2358,8 +2376,9 @@ app.post("/make-server-34100c2d/bookings", async (c) => {
       (candidate: any) => isSameClientBooking(candidate, bookingData),
     );
 
-    const sameClientSameSlotBookings = sameClientSameDayBookings.filter(
+    const sameClientSameSlotBookings = (sameDayCandidates || []).filter(
       (candidate: any) =>
+        isSameSlotBookingIdentity(candidate, bookingData) &&
         doTimeWindowsOverlap(
           normalizeTimeValue(candidate.time, ""),
           getBookingDurationMinutes(availabilityConfig, candidate),
@@ -2556,6 +2575,21 @@ app.post("/make-server-34100c2d/bookings", async (c) => {
       .single();
 
     if (bookingError) {
+      if (
+        bookingError.code === "23505" &&
+        String(bookingError.message || "").includes(
+          "bookings_active_phone_slot_unique_idx",
+        )
+      ) {
+        return c.json(
+          {
+            error: "This client already has a booking for that slot",
+            code: "CLIENT_ALREADY_BOOKED_SAME_SLOT",
+          },
+          409,
+        );
+      }
+
       console.error("Booking insert error:", bookingError);
       throw bookingError;
     }

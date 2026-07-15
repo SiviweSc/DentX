@@ -29,6 +29,11 @@ const getSupabaseClient = () => {
   );
 };
 
+const normalizePhoneValue = (value: string) =>
+  String(value || "")
+    .replace(/\s+/g, "")
+    .replace(/[^\d+]/g, "");
+
 // Middleware to check admin authentication
 const requireAuth = async (c: any, next: any) => {
   const authHeader = c.req.header("Authorization");
@@ -183,6 +188,40 @@ app.post("/make-server-34100c2d/bookings", async (c) => {
     const bookingData = await c.req.json();
 
     const supabase = getSupabaseClient();
+    const bookingDatePart = String(bookingData.date || "").slice(0, 10);
+    const bookingTime = String(bookingData.time || "").trim();
+    const normalizedBookingPhone = normalizePhoneValue(bookingData.phone || "");
+
+    if (bookingDatePart && bookingTime && normalizedBookingPhone) {
+      const { data: sameSlotCandidates, error: sameSlotCandidatesError } =
+        await supabase
+          .from("bookings")
+          .select("id, phone")
+          .gte("date", `${bookingDatePart}T00:00:00`)
+          .lt("date", `${bookingDatePart}T23:59:59`)
+          .eq("time", bookingTime)
+          .in("status", ["pending", "confirmed", "completed"]);
+
+      if (sameSlotCandidatesError) {
+        throw sameSlotCandidatesError;
+      }
+
+      const hasSameSlotDuplicate = (sameSlotCandidates || []).some(
+        (candidate: any) =>
+          normalizePhoneValue(candidate?.phone || "") ===
+          normalizedBookingPhone,
+      );
+
+      if (hasSameSlotDuplicate) {
+        return c.json(
+          {
+            error: "This client already has a booking for that slot",
+            code: "CLIENT_ALREADY_BOOKED_SAME_SLOT",
+          },
+          409,
+        );
+      }
+    }
 
     // Insert booking
     const { data: booking, error: bookingError } = await supabase
@@ -191,7 +230,7 @@ app.post("/make-server-34100c2d/bookings", async (c) => {
         service_type: bookingData.serviceType,
         practitioner_type: bookingData.practitionerType,
         date: bookingData.date,
-        time: bookingData.time,
+        time: bookingTime,
         reason: bookingData.reason || "",
         first_name: bookingData.firstName,
         last_name: bookingData.lastName,
@@ -207,6 +246,21 @@ app.post("/make-server-34100c2d/bookings", async (c) => {
       .single();
 
     if (bookingError) {
+      if (
+        bookingError.code === "23505" &&
+        String(bookingError.message || "").includes(
+          "bookings_active_phone_slot_unique_idx",
+        )
+      ) {
+        return c.json(
+          {
+            error: "This client already has a booking for that slot",
+            code: "CLIENT_ALREADY_BOOKED_SAME_SLOT",
+          },
+          409,
+        );
+      }
+
       console.error("Booking insert error:", bookingError);
       throw bookingError;
     }

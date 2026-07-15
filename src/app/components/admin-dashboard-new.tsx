@@ -1860,7 +1860,7 @@ function DashboardContent({
       {/* Weekly Calendar */}
       <Card>
         <CardHeader>
-          <CardTitle>Weekly Calendar</CardTitle>
+          <CardTitle>Calendar</CardTitle>
         </CardHeader>
         <CardContent>
           <WeeklyCalendar
@@ -1892,13 +1892,18 @@ function WeeklyCalendar({
 }) {
   const [weekBookings, setWeekBookings] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
-  const [currentWeekStart, setCurrentWeekStart] = useState(
-    getWeekStart(new Date()),
-  );
+  const [viewMode, setViewMode] = useState<"week" | "day">("week");
+  const [currentDate, setCurrentDate] = useState(() => {
+    const date = new Date();
+    date.setHours(0, 0, 0, 0);
+    return date;
+  });
+
+  const currentWeekStart = getWeekStart(currentDate);
 
   useEffect(() => {
     fetchWeekBookings();
-  }, [currentWeekStart]);
+  }, [currentDate, viewMode]);
 
   // Format date as YYYY-MM-DD using LOCAL time to avoid UTC timezone mismatches.
   // toISOString() converts to UTC which shifts dates in UTC+2 (SA) timezone.
@@ -1921,16 +1926,22 @@ function WeeklyCalendar({
   const fetchWeekBookings = async () => {
     try {
       setLoading(true);
-      const weekEnd = new Date(currentWeekStart);
-      weekEnd.setDate(weekEnd.getDate() + 6);
+      const rangeStart = new Date(
+        viewMode === "week" ? currentWeekStart : currentDate,
+      );
+      rangeStart.setHours(0, 0, 0, 0);
+      const rangeEnd = new Date(rangeStart);
+      if (viewMode === "week") {
+        rangeEnd.setDate(rangeEnd.getDate() + 6);
+      }
 
       // Use "YYYY-MM-DDT23:59:59" for the upper bound so that records stored as
       // full ISO datetimes (e.g. "2026-04-01T09:00:00") are included.
       const { data, error } = await supabase
         .from("bookings")
         .select("*")
-        .gte("date", toLocalDateStr(currentWeekStart))
-        .lte("date", toLocalDateStr(weekEnd) + "T23:59:59")
+        .gte("date", toLocalDateStr(rangeStart))
+        .lte("date", toLocalDateStr(rangeEnd) + "T23:59:59")
         .in("status", ["pending", "confirmed"])
         .order("date", { ascending: true })
         .order("time", { ascending: true });
@@ -1948,19 +1959,23 @@ function WeeklyCalendar({
   };
 
   const goToPreviousWeek = () => {
-    const newStart = new Date(currentWeekStart);
-    newStart.setDate(newStart.getDate() - 7);
-    setCurrentWeekStart(newStart);
+    const nextDate = new Date(currentDate);
+    nextDate.setDate(nextDate.getDate() - (viewMode === "week" ? 7 : 1));
+    nextDate.setHours(0, 0, 0, 0);
+    setCurrentDate(nextDate);
   };
 
   const goToNextWeek = () => {
-    const newStart = new Date(currentWeekStart);
-    newStart.setDate(newStart.getDate() + 7);
-    setCurrentWeekStart(newStart);
+    const nextDate = new Date(currentDate);
+    nextDate.setDate(nextDate.getDate() + (viewMode === "week" ? 7 : 1));
+    nextDate.setHours(0, 0, 0, 0);
+    setCurrentDate(nextDate);
   };
 
   const goToToday = () => {
-    setCurrentWeekStart(getWeekStart(new Date()));
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    setCurrentDate(today);
   };
 
   const weekDays = Array.from({ length: 7 }, (_, i) => {
@@ -1976,6 +1991,9 @@ function WeeklyCalendar({
     return weekBookings.filter((b) => b.date?.startsWith(dateStr));
   };
 
+  const selectedDayBookings = getBookingsForDay(currentDate);
+  const isSelectedDaySunday = currentDate.getDay() === 0;
+
   if (loading) {
     return (
       <div className="text-center py-8">
@@ -1988,115 +2006,220 @@ function WeeklyCalendar({
   return (
     <div className="space-y-4">
       {/* Calendar Header */}
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-        <h3 className="text-sm sm:text-lg font-semibold text-gray-900">
-          {format(currentWeekStart, "MMM d")} &ndash;{" "}
-          {format(weekDays[6], "MMM d, yyyy")}
-        </h3>
-        <div className="flex gap-1 sm:gap-2">
-          {canCreateBooking && (
+      <div className="flex flex-col gap-3">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+          <div>
+            <h3 className="text-sm sm:text-lg font-semibold text-gray-900">
+              {viewMode === "week"
+                ? `${format(currentWeekStart, "MMM d")} - ${format(weekDays[6], "MMM d, yyyy")}`
+                : format(currentDate, "EEEE, MMM d, yyyy")}
+            </h3>
+            <p className="text-xs sm:text-sm text-gray-500 mt-1">
+              {viewMode === "week"
+                ? "Weekly overview"
+                : `${selectedDayBookings.length} booking${selectedDayBookings.length === 1 ? "" : "s"} for this day`}
+            </p>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="inline-flex rounded-md border border-gray-200 bg-white p-1">
+              <Button
+                size="sm"
+                variant={viewMode === "week" ? "default" : "ghost"}
+                onClick={() => setViewMode("week")}
+                className={`text-xs sm:text-sm ${
+                  viewMode === "week"
+                    ? "bg-[#9A7B1D] hover:bg-[#7d6418] text-white"
+                    : ""
+                }`}
+              >
+                Week
+              </Button>
+              <Button
+                size="sm"
+                variant={viewMode === "day" ? "default" : "ghost"}
+                onClick={() => setViewMode("day")}
+                className={`text-xs sm:text-sm ${
+                  viewMode === "day"
+                    ? "bg-[#9A7B1D] hover:bg-[#7d6418] text-white"
+                    : ""
+                }`}
+              >
+                Day
+              </Button>
+            </div>
+
+            {canCreateBooking && (
+              <Button
+                size="sm"
+                onClick={onCreateBooking}
+                className="text-xs sm:text-sm bg-[#9A7B1D] hover:bg-[#7d6418]"
+              >
+                <Plus className="w-4 h-4 mr-1 sm:mr-2" />
+                Create Booking
+              </Button>
+            )}
+
             <Button
+              variant="outline"
               size="sm"
-              onClick={onCreateBooking}
-              className="text-xs sm:text-sm bg-[#9A7B1D] hover:bg-[#7d6418]"
+              onClick={goToPreviousWeek}
+              className="text-xs sm:text-sm"
             >
-              <Plus className="w-4 h-4 mr-1 sm:mr-2" />
-              Create Booking
+              ‹ Prev
             </Button>
-          )}
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={goToPreviousWeek}
-            className="text-xs sm:text-sm"
-          >
-            ‹ Prev
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={goToToday}
-            className="text-xs sm:text-sm"
-          >
-            Today
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={goToNextWeek}
-            className="text-xs sm:text-sm"
-          >
-            Next ›
-          </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={goToToday}
+              className="text-xs sm:text-sm"
+            >
+              Today
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={goToNextWeek}
+              className="text-xs sm:text-sm"
+            >
+              Next ›
+            </Button>
+          </div>
         </div>
       </div>
 
-      {/* Calendar Grid — horizontally scrollable on mobile */}
-      <div className="overflow-x-auto -mx-2 px-2">
-        <div className="grid grid-cols-7 gap-1 sm:gap-2 min-w-[560px]">
-          {weekDays.map((date, index) => {
-            const dayBookings = getBookingsForDay(date);
-            const isToday = date.toDateString() === new Date().toDateString();
-            const isSunday = date.getDay() === 0;
+      <div className="max-h-[540px] overflow-y-auto pr-1">
+        {viewMode === "week" ? (
+        <div className="overflow-x-auto -mx-2 px-2">
+          <div className="grid grid-cols-7 gap-1 sm:gap-2 min-w-[560px]">
+            {weekDays.map((date, index) => {
+              const dayBookings = getBookingsForDay(date);
+              const isToday = date.toDateString() === new Date().toDateString();
+              const isSunday = date.getDay() === 0;
 
-            return (
-              <div
-                key={index}
-                className={`border rounded-lg p-2 sm:p-3 min-h-[160px] sm:min-h-[200px] ${
-                  isToday
-                    ? "border-[#9A7B1D] border-2 bg-[#F5F1E8]"
-                    : "border-gray-200 bg-white"
-                } ${isSunday ? "opacity-50 bg-gray-50" : ""}`}
-              >
-                <div className="mb-1 sm:mb-2">
-                  <div
-                    className={`text-xs font-medium ${isToday ? "text-[#9A7B1D]" : "text-gray-600"}`}
-                  >
-                    {format(date, "EEE")}
+              return (
+                <div
+                  key={index}
+                  className={`border rounded-lg p-2 sm:p-3 h-[220px] sm:h-[260px] flex flex-col ${
+                    isToday
+                      ? "border-[#9A7B1D] border-2 bg-[#F5F1E8]"
+                      : "border-gray-200 bg-white"
+                  } ${isSunday ? "opacity-50 bg-gray-50" : ""}`}
+                >
+                  <div className="mb-1 sm:mb-2">
+                    <div
+                      className={`text-xs font-medium ${isToday ? "text-[#9A7B1D]" : "text-gray-600"}`}
+                    >
+                      {format(date, "EEE")}
+                    </div>
+                    <div
+                      className={`text-base sm:text-xl font-bold ${isToday ? "text-[#9A7B1D]" : "text-gray-900"}`}
+                    >
+                      {format(date, "d")}
+                    </div>
                   </div>
-                  <div
-                    className={`text-base sm:text-xl font-bold ${isToday ? "text-[#9A7B1D]" : "text-gray-900"}`}
-                  >
-                    {format(date, "d")}
-                  </div>
-                </div>
 
-                {isSunday ? (
-                  <div className="text-xs text-gray-400 text-center mt-2">
-                    Closed
-                  </div>
-                ) : (
-                  <div className="space-y-1">
-                    {dayBookings.length === 0 ? (
-                      <div className="text-xs text-gray-400 text-center mt-2">
-                        —
-                      </div>
-                    ) : (
-                      dayBookings.map((booking) => (
-                        <div
-                          key={booking.id}
-                          className={`text-xs p-1 sm:p-2 rounded ${
-                            booking.status === "confirmed"
-                              ? "bg-green-100 text-green-800 border border-green-200"
-                              : "bg-yellow-100 text-yellow-800 border border-yellow-200"
-                          }`}
-                        >
-                          <div className="font-semibold">{booking.time}</div>
-                          <div className="truncate">
-                            {booking.first_name} {booking.last_name}
-                          </div>
-                          <div className="truncate text-gray-500 hidden sm:block">
-                            {booking.service_type}
-                          </div>
+                  {isSunday ? (
+                    <div className="text-xs text-gray-400 text-center mt-2">
+                      Closed
+                    </div>
+                  ) : (
+                    <div className="space-y-1 overflow-y-auto pr-1">
+                      {dayBookings.length === 0 ? (
+                        <div className="text-xs text-gray-400 text-center mt-2">
+                          —
                         </div>
-                      ))
-                    )}
-                  </div>
-                )}
-              </div>
-            );
-          })}
+                      ) : (
+                        dayBookings.map((booking) => (
+                          <div
+                            key={booking.id}
+                            className={`text-xs p-1 sm:p-2 rounded ${
+                              booking.status === "confirmed"
+                                ? "bg-green-100 text-green-800 border border-green-200"
+                                : "bg-yellow-100 text-yellow-800 border border-yellow-200"
+                            }`}
+                          >
+                            <div className="font-semibold">{booking.time}</div>
+                            <div className="truncate">
+                              {booking.first_name} {booking.last_name}
+                            </div>
+                            <div className="truncate text-gray-500 hidden sm:block">
+                              {booking.service_type}
+                            </div>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
         </div>
+      ) : (
+        <div className="border border-gray-200 rounded-lg p-3 sm:p-4 bg-white h-[520px] flex flex-col">
+          <div className="flex items-center justify-between border-b border-gray-100 pb-3 mb-3">
+            <div>
+              <p className="text-xs text-gray-500">{format(currentDate, "EEEE")}</p>
+              <p className="text-lg font-semibold text-gray-900">
+                {format(currentDate, "MMM d, yyyy")}
+              </p>
+            </div>
+            <Badge
+              variant="outline"
+              className="text-xs border-[#9A7B1D] text-[#9A7B1D]"
+            >
+              {selectedDayBookings.length} booked
+            </Badge>
+          </div>
+
+          <div className="flex-1 min-h-0">
+            {isSelectedDaySunday ? (
+              <div className="h-full flex items-center justify-center text-gray-400">Closed</div>
+            ) : selectedDayBookings.length === 0 ? (
+              <div className="h-full flex items-center justify-center text-gray-400">
+                No bookings for this day
+              </div>
+            ) : (
+              <div className="space-y-2 h-full overflow-y-auto pr-1">
+                {selectedDayBookings.map((booking) => (
+                  <div
+                    key={booking.id}
+                    className={`rounded-lg border p-3 sm:p-4 ${
+                      booking.status === "confirmed"
+                        ? "bg-green-50 border-green-200"
+                        : "bg-yellow-50 border-yellow-200"
+                    }`}
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <div className="text-sm font-semibold text-gray-900">
+                          {booking.time}
+                        </div>
+                        <div className="text-sm text-gray-900 mt-1">
+                          {booking.first_name} {booking.last_name}
+                        </div>
+                        <div className="text-xs text-gray-600 mt-1">
+                          {booking.service_type}
+                        </div>
+                      </div>
+                      <Badge
+                        className={`capitalize ${
+                          booking.status === "confirmed"
+                            ? "bg-green-100 text-green-800"
+                            : "bg-yellow-100 text-yellow-800"
+                        }`}
+                      >
+                        {booking.status}
+                      </Badge>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
       </div>
 
       {/* Legend */}
