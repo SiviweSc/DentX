@@ -1945,7 +1945,7 @@ app.get("/make-server-34100c2d/health", (c) => {
   return c.json({ status: "ok" });
 });
 
-app.get("/make-server-34100c2d/availability", async (c) => {
+const handleAvailabilityRequest = async (c: any) => {
   try {
     const supabase = getSupabaseClient();
     return c.json({
@@ -1956,7 +1956,10 @@ app.get("/make-server-34100c2d/availability", async (c) => {
     console.error("Availability fetch exception:", error);
     return c.json({ success: true, config: DEFAULT_AVAILABILITY_CONFIG });
   }
-});
+};
+
+app.get("/make-server-34100c2d/availability", handleAvailabilityRequest);
+app.get("/availability", handleAvailabilityRequest);
 
 app.get("/make-server-34100c2d/service-types", async (c) => {
   try {
@@ -1969,7 +1972,7 @@ app.get("/make-server-34100c2d/service-types", async (c) => {
   }
 });
 
-app.get("/make-server-34100c2d/service-catalog", async (c) => {
+const handleServiceCatalogRequest = async (c: any) => {
   try {
     const supabase = getSupabaseClient();
     const serviceCatalog = await fetchServiceCatalogFromDb(supabase);
@@ -1978,7 +1981,10 @@ app.get("/make-server-34100c2d/service-catalog", async (c) => {
     console.error("Service catalog fetch exception:", error);
     return c.json({ error: "Failed to fetch service catalog" }, 500);
   }
-});
+};
+
+app.get("/make-server-34100c2d/service-catalog", handleServiceCatalogRequest);
+app.get("/service-catalog", handleServiceCatalogRequest);
 
 app.post(
   "/make-server-34100c2d/service-types",

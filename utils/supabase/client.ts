@@ -22,7 +22,11 @@ if (!supabaseUrl || !supabaseAnonKey) {
 export const supabase = createClient(supabaseUrl, supabaseAnonKey);
 export const supabaseFunctionsBaseUrl = `${supabaseUrl}/functions/v1/${supabaseFunctionName}`;
 export const supabaseAdminApiBaseUrl = `${supabaseFunctionsBaseUrl}/${supabaseApiPrefix}`;
+const supabaseFunctionsBaseUrlWithBasePath = `${supabaseFunctionsBaseUrl}/${supabaseFunctionName}`;
+const supabaseAdminApiBaseUrlWithBasePath = `${supabaseFunctionsBaseUrlWithBasePath}/${supabaseApiPrefix}`;
 export const supabaseAdminApiBaseUrls = [
   supabaseAdminApiBaseUrl,
+  supabaseAdminApiBaseUrlWithBasePath,
   supabaseFunctionsBaseUrl,
+  supabaseFunctionsBaseUrlWithBasePath,
 ].filter((url, index, arr) => arr.indexOf(url) === index);

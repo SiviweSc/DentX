@@ -6,10 +6,8 @@ import { createClient } from "jsr:@supabase/supabase-js@2.49.8";
 
 const app = new Hono().basePath("/hyper-responder");
 
-// Enable logger
 app.use("*", logger(console.log));
 
-// Enable CORS for all routes and methods
 app.use(
   "/*",
   cors({
@@ -21,7 +19,6 @@ app.use(
   }),
 );
 
-// Create Supabase client
 const getSupabaseClient = () => {
   return createClient(
     Deno.env.get("SUPABASE_URL") ?? "",
@@ -34,7 +31,6 @@ const normalizePhoneValue = (value: string) =>
     .replace(/\s+/g, "")
     .replace(/[^\d+]/g, "");
 
-// Middleware to check admin authentication
 const requireAuth = async (c: any, next: any) => {
   const authHeader = c.req.header("Authorization");
   if (!authHeader) {
@@ -58,46 +54,33 @@ const requireAuth = async (c: any, next: any) => {
 
     c.set("user", data);
     await next();
-  } catch (e) {
+  } catch {
     return c.json({ error: "Invalid authorization header" }, 401);
   }
 };
 
-// Health check endpoint
 app.get("/make-server-34100c2d/health", (c) => {
   return c.json({ status: "ok" });
 });
 
-// Admin login endpoint
+const handleAvailabilityRequest = async (c: any) => {
+  return c.json({ success: true, config: null });
+};
+
+const handleServiceCatalogRequest = async (c: any) => {
+  return c.json({ success: true, services: [] });
+};
+
+app.get("/make-server-34100c2d/availability", handleAvailabilityRequest);
+app.get("/availability", handleAvailabilityRequest);
+app.get("/make-server-34100c2d/service-catalog", handleServiceCatalogRequest);
+app.get("/service-catalog", handleServiceCatalogRequest);
+
 app.post("/make-server-34100c2d/auth/login", async (c) => {
-  console.log("=== LOGIN ATTEMPT ===");
   try {
     const { username, password } = await c.req.json();
-    console.log("Username:", username);
-    console.log("Password length:", password?.length);
 
     const supabase = getSupabaseClient();
-    console.log("Supabase client created");
-
-    // First check if table exists by trying to query it
-    const { data: testQuery, error: testError } = await supabase
-      .from("admin_users")
-      .select("count");
-
-    if (testError) {
-      console.error("❌ Table check error:", testError);
-      return c.json(
-        {
-          success: false,
-          error: "Database table error: " + testError.message,
-          hint: "Please run the SQL migration first",
-        },
-        500,
-      );
-    }
-
-    console.log("✅ Table exists, checking credentials...");
-
     const { data, error } = await supabase
       .from("admin_users")
       .select("*")
@@ -105,45 +88,20 @@ app.post("/make-server-34100c2d/auth/login", async (c) => {
       .eq("password_hash", password)
       .single();
 
-    console.log("Query result - Data:", data ? "Found" : "Not found");
-    console.log("Query result - Error:", error);
-
     if (error || !data) {
-      console.error("❌ Login failed - Invalid credentials");
-      console.error("Error details:", error);
-
-      // Check if user exists with different password
-      const { data: userCheck } = await supabase
-        .from("admin_users")
-        .select("username")
-        .eq("username", username)
-        .single();
-
-      if (userCheck) {
-        console.log("User exists but password wrong");
-        return c.json({ success: false, error: "Invalid password" }, 401);
-      } else {
-        console.log("User does not exist");
-        return c.json({ success: false, error: "User not found" }, 401);
-      }
+      return c.json({ success: false, error: "Invalid credentials" }, 401);
     }
 
-    console.log("✅ Login successful for:", username);
-
-    // Update last login
     await supabase
       .from("admin_users")
       .update({ last_login: new Date().toISOString() })
       .eq("id", data.id);
 
-    // Log activity
     await supabase.from("activity_log").insert({
       type: "login",
       user_name: username,
       description: "Admin logged in successfully",
     });
-
-    console.log("✅ Returning success response");
 
     return c.json({
       success: true,
@@ -154,15 +112,13 @@ app.post("/make-server-34100c2d/auth/login", async (c) => {
       token: btoa(`${username}:${password}`),
     });
   } catch (error) {
-    console.error("❌ Login error:", error);
     return c.json(
-      { success: false, error: "Login failed: " + error.message },
+      { success: false, error: "Login failed: " + (error as Error).message },
       500,
     );
   }
 });
 
-// Get all bookings
 app.get("/make-server-34100c2d/bookings", requireAuth, async (c) => {
   try {
     const supabase = getSupabaseClient();
@@ -177,17 +133,18 @@ app.get("/make-server-34100c2d/bookings", requireAuth, async (c) => {
 
     return c.json({ success: true, bookings: data || [] });
   } catch (error) {
-    console.error("Get bookings error:", error);
-    return c.json({ error: "Failed to fetch bookings: " + error.message }, 500);
+    return c.json(
+      { error: "Failed to fetch bookings: " + (error as Error).message },
+      500,
+    );
   }
 });
 
-// Create booking
 app.post("/make-server-34100c2d/bookings", async (c) => {
   try {
     const bookingData = await c.req.json();
-
     const supabase = getSupabaseClient();
+
     const bookingDatePart = String(bookingData.date || "").slice(0, 10);
     const bookingTime = String(bookingData.time || "").trim();
     const normalizedBookingPhone = normalizePhoneValue(bookingData.phone || "");
@@ -223,7 +180,6 @@ app.post("/make-server-34100c2d/bookings", async (c) => {
       }
     }
 
-    // Insert booking
     const { data: booking, error: bookingError } = await supabase
       .from("bookings")
       .insert({
@@ -261,11 +217,9 @@ app.post("/make-server-34100c2d/bookings", async (c) => {
         );
       }
 
-      console.error("Booking insert error:", bookingError);
       throw bookingError;
     }
 
-    // Log activity
     await supabase.from("activity_log").insert({
       type: "booking_created",
       user_name: bookingData.source === "website" ? "Website User" : "Admin",
@@ -282,9 +236,7 @@ app.post("/make-server-34100c2d/bookings", async (c) => {
       id_number: bookingData.idNumber || "",
     });
 
-    // Create/update patient record
     if (bookingData.idNumber) {
-      // Check if patient exists
       const { data: existingPatient } = await supabase
         .from("patients")
         .select("*")
@@ -292,7 +244,6 @@ app.post("/make-server-34100c2d/bookings", async (c) => {
         .single();
 
       if (existingPatient) {
-        // Update existing patient
         await supabase
           .from("patients")
           .update({
@@ -301,7 +252,6 @@ app.post("/make-server-34100c2d/bookings", async (c) => {
           })
           .eq("id_number", bookingData.idNumber);
       } else {
-        // Create new patient
         await supabase.from("patients").insert({
           first_name: bookingData.firstName,
           last_name: bookingData.lastName,
@@ -317,20 +267,19 @@ app.post("/make-server-34100c2d/bookings", async (c) => {
 
     return c.json({ success: true, booking, bookingId: booking.id });
   } catch (error) {
-    console.error("Create booking error:", error);
-    return c.json({ error: "Failed to create booking: " + error.message }, 500);
+    return c.json(
+      { error: "Failed to create booking: " + (error as Error).message },
+      500,
+    );
   }
 });
 
-// Update booking status
 app.put("/make-server-34100c2d/bookings/:id", requireAuth, async (c) => {
   try {
     const bookingId = c.req.param("id");
     const updates = await c.req.json();
 
     const supabase = getSupabaseClient();
-
-    // Update booking
     const { data: booking, error } = await supabase
       .from("bookings")
       .update({
@@ -348,7 +297,6 @@ app.put("/make-server-34100c2d/bookings/:id", requireAuth, async (c) => {
       throw error;
     }
 
-    // Log activity
     await supabase.from("activity_log").insert({
       type: "booking_updated",
       user_name: "Admin",
@@ -358,19 +306,18 @@ app.put("/make-server-34100c2d/bookings/:id", requireAuth, async (c) => {
 
     return c.json({ success: true, booking });
   } catch (error) {
-    console.error("Update booking error:", error);
-    return c.json({ error: "Failed to update booking: " + error.message }, 500);
+    return c.json(
+      { error: "Failed to update booking: " + (error as Error).message },
+      500,
+    );
   }
 });
 
-// Delete booking
 app.delete("/make-server-34100c2d/bookings/:id", requireAuth, async (c) => {
   try {
     const bookingId = c.req.param("id");
 
     const supabase = getSupabaseClient();
-
-    // Get booking details before deleting
     const { data: booking } = await supabase
       .from("bookings")
       .select("*")
@@ -381,7 +328,6 @@ app.delete("/make-server-34100c2d/bookings/:id", requireAuth, async (c) => {
       return c.json({ error: "Booking not found" }, 404);
     }
 
-    // Delete booking
     const { error } = await supabase
       .from("bookings")
       .delete()
@@ -391,7 +337,6 @@ app.delete("/make-server-34100c2d/bookings/:id", requireAuth, async (c) => {
       throw error;
     }
 
-    // Log activity
     await supabase.from("activity_log").insert({
       type: "booking_deleted",
       user_name: "Admin",
@@ -401,12 +346,13 @@ app.delete("/make-server-34100c2d/bookings/:id", requireAuth, async (c) => {
 
     return c.json({ success: true });
   } catch (error) {
-    console.error("Delete booking error:", error);
-    return c.json({ error: "Failed to delete booking: " + error.message }, 500);
+    return c.json(
+      { error: "Failed to delete booking: " + (error as Error).message },
+      500,
+    );
   }
 });
 
-// Get all patients
 app.get("/make-server-34100c2d/patients", requireAuth, async (c) => {
   try {
     const supabase = getSupabaseClient();
@@ -419,9 +365,8 @@ app.get("/make-server-34100c2d/patients", requireAuth, async (c) => {
       throw error;
     }
 
-    // Get booking counts for each patient
     const patientsWithBookings = await Promise.all(
-      (data || []).map(async (patient) => {
+      (data || []).map(async (patient: any) => {
         const { count } = await supabase
           .from("bookings")
           .select("*", { count: "exact", head: true })
@@ -436,12 +381,13 @@ app.get("/make-server-34100c2d/patients", requireAuth, async (c) => {
 
     return c.json({ success: true, patients: patientsWithBookings });
   } catch (error) {
-    console.error("Get patients error:", error);
-    return c.json({ error: "Failed to fetch patients: " + error.message }, 500);
+    return c.json(
+      { error: "Failed to fetch patients: " + (error as Error).message },
+      500,
+    );
   }
 });
 
-// Get all booking contacts
 app.get("/make-server-34100c2d/booking-contacts", requireAuth, async (c) => {
   try {
     const supabase = getSupabaseClient();
@@ -454,7 +400,7 @@ app.get("/make-server-34100c2d/booking-contacts", requireAuth, async (c) => {
       throw error;
     }
 
-    const bookingContacts = (data || []).map((contact) => ({
+    const bookingContacts = (data || []).map((contact: any) => ({
       id: contact.id,
       firstName: contact.first_name,
       lastName: contact.last_name,
@@ -468,14 +414,15 @@ app.get("/make-server-34100c2d/booking-contacts", requireAuth, async (c) => {
 
     return c.json({ success: true, bookingContacts });
   } catch (error) {
-    console.error("Get booking contacts error:", error);
     return c.json(
-      { error: "Failed to fetch booking contacts: " + error.message },
+      {
+        error: "Failed to fetch booking contacts: " + (error as Error).message,
+      },
       500,
     );
   }
 });
-// Get activity log
+
 app.get("/make-server-34100c2d/activity", requireAuth, async (c) => {
   try {
     const supabase = getSupabaseClient();
@@ -489,8 +436,7 @@ app.get("/make-server-34100c2d/activity", requireAuth, async (c) => {
       throw error;
     }
 
-    // Transform to match expected format
-    const activities = (data || []).map((log) => ({
+    const activities = (data || []).map((log: any) => ({
       type: log.type,
       user: log.user_name,
       timestamp: log.timestamp,
@@ -500,15 +446,13 @@ app.get("/make-server-34100c2d/activity", requireAuth, async (c) => {
 
     return c.json({ success: true, activities });
   } catch (error) {
-    console.error("Get activity error:", error);
     return c.json(
-      { error: "Failed to fetch activity log: " + error.message },
+      { error: "Failed to fetch activity log: " + (error as Error).message },
       500,
     );
   }
 });
 
-// Get booked slots for a specific date
 app.get("/make-server-34100c2d/booked-slots/:date", async (c) => {
   try {
     const dateParam = c.req.param("date");
@@ -526,13 +470,12 @@ app.get("/make-server-34100c2d/booked-slots/:date", async (c) => {
       throw error;
     }
 
-    const bookedSlots = (data || []).map((booking) => booking.time);
+    const bookedSlots = (data || []).map((booking: any) => booking.time);
 
     return c.json({ success: true, bookedSlots });
   } catch (error) {
-    console.error("Get booked slots error:", error);
     return c.json(
-      { error: "Failed to fetch booked slots: " + error.message },
+      { error: "Failed to fetch booked slots: " + (error as Error).message },
       500,
     );
   }

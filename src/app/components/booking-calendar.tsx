@@ -1470,7 +1470,6 @@ export function BookingCalendar({
             startAccessor="start"
             endAccessor="end"
             defaultView="week"
-            view="week"
             views={["week"]}
             date={currentDate}
             onNavigate={setCurrentDate}
