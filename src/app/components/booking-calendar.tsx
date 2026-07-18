@@ -448,6 +448,7 @@ export function BookingCalendar({
       let bookingsQuery = supabase
         .from("bookings")
         .select("*")
+        .neq("status", "cancelled")
         .order("date", { ascending: true })
         .order("time", { ascending: true });
 
@@ -1221,8 +1222,13 @@ export function BookingCalendar({
   const handleCancelBooking = () => {
     if (!selectedBooking) return;
 
-    if (selectedBooking.status !== "confirmed") {
-      toast.error("Only confirmed bookings can be cancelled");
+    if (!canConfirmBooking) {
+      toast.error("You do not have permission to cancel bookings");
+      return;
+    }
+
+    if (!["pending", "confirmed"].includes(selectedBooking.status)) {
+      toast.error("Only pending or confirmed bookings can be cancelled");
       return;
     }
 
@@ -1344,7 +1350,7 @@ export function BookingCalendar({
   }
 
   return (
-    <div className="h-full flex flex-col relative">
+    <div className="h-full min-h-0 flex flex-col relative">
       <Button
         size="icon"
         variant="outline"
@@ -1375,8 +1381,7 @@ export function BookingCalendar({
                 Weekly Calendar
               </h2>
               <p className="text-xs sm:text-sm text-gray-600 mt-1">
-                One week per screen. Click an empty slot or cancelled booking to
-                add a new booking.
+                One week per screen. Click an empty slot to add a new booking.
               </p>
             </div>
             <div className="flex flex-wrap items-center gap-2">
@@ -1453,17 +1458,13 @@ export function BookingCalendar({
                 <div className="w-3 h-3 rounded bg-indigo-500"></div>
                 <span>Completed</span>
               </div>
-              <div className="flex items-center gap-2">
-                <div className="w-3 h-3 rounded border border-dashed border-rose-400 bg-rose-50"></div>
-                <span>Cancelled slot available</span>
-              </div>
             </div>
           </div>
         </>
       )}
 
-      <div className="flex-1 overflow-x-auto rounded-lg border border-gray-200 bg-white">
-        <div className="min-w-[980px] h-[1880px] [&_.rbc-time-view]:border-0 [&_.rbc-time-header-content]:border-l-0 [&_.rbc-time-content]:border-t [&_.rbc-timeslot-group]:min-h-[110px] [&_.rbc-toolbar]:hidden [&_.rbc-event]:box-border [&_.rbc-event]:shadow-none [&_.rbc-event]:min-h-0 [&_.rbc-event-label]:hidden [&_.rbc-event-content]:h-full [&_.rbc-event-content]:overflow-hidden [&_.rbc-day-slot_.rbc-time-slot]:min-h-[110px] [&_.rbc-time-slot]:text-xs [&_.rbc-header]:py-3 [&_.rbc-header]:text-sm [&_.rbc-header]:font-semibold [&_.rbc-today]:bg-[#faf7ef] [&_.rbc-current-time-indicator]:bg-[#9A7B1D]">
+      <div className="flex-1 min-h-0 overflow-x-auto overflow-y-hidden rounded-lg border border-gray-200 bg-white">
+        <div className="min-w-[980px] h-full [&_.rbc-time-view]:border-0 [&_.rbc-time-header-content]:border-l-0 [&_.rbc-time-content]:border-t [&_.rbc-timeslot-group]:min-h-[110px] [&_.rbc-toolbar]:hidden [&_.rbc-event]:box-border [&_.rbc-event]:shadow-none [&_.rbc-event]:min-h-0 [&_.rbc-event-label]:hidden [&_.rbc-event-content]:h-full [&_.rbc-event-content]:overflow-hidden [&_.rbc-day-slot_.rbc-time-slot]:min-h-[110px] [&_.rbc-time-slot]:text-xs [&_.rbc-header]:py-3 [&_.rbc-header]:text-sm [&_.rbc-header]:font-semibold [&_.rbc-today]:bg-[#faf7ef] [&_.rbc-current-time-indicator]:bg-[#9A7B1D]">
           <BigCalendar
             localizer={localizer}
             events={events}
@@ -1997,16 +1998,18 @@ export function BookingCalendar({
                       Reschedule
                     </Button>
                   )}
+                  {(selectedBooking.status === "pending" ||
+                    selectedBooking.status === "confirmed") &&
+                    canConfirmBooking && (
+                      <Button
+                        variant="outline"
+                        className="flex-1 text-red-600 border-red-600 hover:bg-red-50 text-xs sm:text-sm"
+                        onClick={handleCancelBooking}
+                      >
+                        Cancel
+                      </Button>
+                    )}
                 </div>
-                {selectedBooking?.status === "confirmed" && (
-                  <Button
-                    variant="outline"
-                    className="w-full text-red-600 border-red-600 hover:bg-red-50"
-                    onClick={handleCancelBooking}
-                  >
-                    Cancel Booking
-                  </Button>
-                )}
                 <Button
                   variant="outline"
                   className="w-full"
@@ -2163,7 +2166,7 @@ export function BookingCalendar({
             </DialogTitle>
             <DialogDescription>
               {pendingAction === "cancel"
-                ? `Cancel the confirmed booking for ${selectedBooking?.first_name || "this patient"} ${selectedBooking?.last_name || ""}?`
+                ? `Cancel the booking for ${selectedBooking?.first_name || "this patient"} ${selectedBooking?.last_name || ""}?`
                 : `Move booking for ${selectedBooking?.first_name || "this patient"} ${selectedBooking?.last_name || ""} back to pending and clear the assigned doctor?`}
             </DialogDescription>
           </DialogHeader>
