@@ -1,4 +1,6 @@
 User-agent: *
 Allow: /
+Disallow: /admin
+Disallow: /portal
 
 Sitemap: https://dentxquarters.co.za/sitemap.xml

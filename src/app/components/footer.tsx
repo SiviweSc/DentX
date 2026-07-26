@@ -12,7 +12,13 @@ export function Footer({ onAdminLogin }: FooterProps) {
         <div className="grid grid-cols-1 md:grid-cols-4 gap-8 mb-8">
           {/* Brand */}
           <div>
-            <img src={logo} alt="DentX Quarters Logo" className="h-16 mb-4" />
+            <img
+              src={logo}
+              alt="DentX Quarters Logo"
+              loading="lazy"
+              decoding="async"
+              className="h-16 mb-4"
+            />
             <p className="text-gray-400 text-sm mb-4">
               Perfection meets Dentistry. Your integrated health ecosystem
               promoting healing, prevention, and performance.
@@ -51,7 +57,7 @@ export function Footer({ onAdminLogin }: FooterProps) {
             <ul className="space-y-2 text-sm">
               <li>
                 <a
-                  href="#services"
+                  href="/services"
                   className="text-gray-400 hover:text-white transition-colors"
                 >
                   Services
@@ -59,7 +65,7 @@ export function Footer({ onAdminLogin }: FooterProps) {
               </li>
               <li>
                 <a
-                  href="#about"
+                  href="/about"
                   className="text-gray-400 hover:text-white transition-colors"
                 >
                   About Us
@@ -67,7 +73,7 @@ export function Footer({ onAdminLogin }: FooterProps) {
               </li>
               <li>
                 <a
-                  href="#team"
+                  href="/team"
                   className="text-gray-400 hover:text-white transition-colors"
                 >
                   Our Team
@@ -75,10 +81,18 @@ export function Footer({ onAdminLogin }: FooterProps) {
               </li>
               <li>
                 <a
-                  href="#testimonials"
+                  href="/testimonials"
                   className="text-gray-400 hover:text-white transition-colors"
                 >
                   Testimonials
+                </a>
+              </li>
+              <li>
+                <a
+                  href="/contact"
+                  className="text-gray-400 hover:text-white transition-colors"
+                >
+                  Contact
                 </a>
               </li>
             </ul>

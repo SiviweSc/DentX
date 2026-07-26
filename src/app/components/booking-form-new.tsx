@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { Label } from "./ui/label";
@@ -74,6 +74,7 @@ const DEFAULT_PRACTITIONER = {
 };
 
 export function BookingFormNew({ onClose }: BookingFormNewProps) {
+  const timeSelectionRef = useRef<HTMLDivElement | null>(null);
   const [step, setStep] = useState(1);
   const [bookedSlots, setBookedSlots] = useState<string[]>([]);
   const [slotCounts, setSlotCounts] = useState<Record<string, number>>({});
@@ -418,6 +419,16 @@ export function BookingFormNew({ onClose }: BookingFormNewProps) {
         time: isSameSelection ? prev.time : "",
       };
     });
+
+    const isSmallerScreen = window.matchMedia("(max-width: 1023px)").matches;
+    if (isSmallerScreen) {
+      window.setTimeout(() => {
+        timeSelectionRef.current?.scrollIntoView({
+          behavior: "smooth",
+          block: "start",
+        });
+      }, 120);
+    }
   };
 
   const apiFetchPublic = async (path: string, init?: RequestInit) => {
@@ -909,7 +920,7 @@ This is an automated appointment request from dentxquarters.co.za`;
                   </div>
 
                   {/* Time Selection */}
-                  <div>
+                  <div ref={timeSelectionRef}>
                     <Label className="mb-4 block text-lg text-gray-700">
                       Select Time
                     </Label>

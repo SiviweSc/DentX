@@ -22,6 +22,8 @@ export function About() {
               <img
                 src={lonwaboImage}
                 alt="Professional dental care"
+                loading="lazy"
+                decoding="async"
                 className="rounded-2xl shadow-2xl w-full"
               />
             </div>

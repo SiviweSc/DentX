@@ -1,7 +1,7 @@
-import { defineConfig } from 'vite'
-import path from 'path'
-import tailwindcss from '@tailwindcss/vite'
-import react from '@vitejs/plugin-react'
+import { defineConfig } from "vite";
+import path from "path";
+import tailwindcss from "@tailwindcss/vite";
+import react from "@vitejs/plugin-react";
 
 export default defineConfig({
   plugins: [
@@ -13,21 +13,36 @@ export default defineConfig({
   resolve: {
     alias: {
       // Alias @ to the src directory
-      '@': path.resolve(__dirname, './src'),
+      "@": path.resolve(__dirname, "./src"),
     },
   },
-  
-  // Ensure proper base path for deployment
-  base: './',
+
+  // Use absolute root base for cleaner canonical URLs and route output.
+  base: "/",
 
   // File types to support raw imports. Never add .css, .tsx, or .ts files to this.
-  assetsInclude: ['**/*.svg', '**/*.csv'],
-  
+  assetsInclude: ["**/*.svg", "**/*.csv"],
+
   build: {
     // Ensure assets are generated with proper relative paths
-    outDir: 'dist',
-    assetsDir: 'assets',
+    outDir: "dist",
+    assetsDir: "assets",
     // Generate source maps for debugging (can be disabled for production)
     sourcemap: false,
+    minify: "esbuild",
+    cssMinify: true,
+    cssCodeSplit: true,
+    modulePreload: {
+      polyfill: true,
+    },
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          react: ["react", "react-dom", "react-router-dom"],
+          ui: ["@mui/material", "@mui/icons-material", "lucide-react"],
+          charts: ["recharts", "react-big-calendar"],
+        },
+      },
+    },
   },
-})
+});
