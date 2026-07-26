@@ -28,6 +28,43 @@ const buildOrganizationSchema = () => ({
   ],
 });
 
+const buildLocalBusinessSchema = () => ({
+  "@context": "https://schema.org",
+  "@type": ["LocalBusiness", "MedicalClinic", "Dentist"],
+  name: "DentX Quarters",
+  url: SITE_ORIGIN,
+  image: `${SITE_ORIGIN}/favicon.png`,
+  telephone: "+27 68 534 0763",
+  areaServed: ["Nelspruit", "Mbombela"],
+  address: {
+    "@type": "PostalAddress",
+    streetAddress: "Shop F1A, City Centre Shopping Centre, 5 Andrew Street",
+    addressLocality: "Nelspruit",
+    addressRegion: "Mpumalanga",
+    postalCode: "1200",
+    addressCountry: "ZA",
+  },
+  geo: {
+    "@type": "GeoCoordinates",
+    latitude: -25.4753,
+    longitude: 30.9703,
+  },
+  openingHoursSpecification: [
+    {
+      "@type": "OpeningHoursSpecification",
+      dayOfWeek: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"],
+      opens: "08:30",
+      closes: "16:30",
+    },
+    {
+      "@type": "OpeningHoursSpecification",
+      dayOfWeek: "Saturday",
+      opens: "09:00",
+      closes: "13:30",
+    },
+  ],
+});
+
 const buildBreadcrumbSchema = (items: BreadcrumbItem[]) => ({
   "@context": "https://schema.org",
   "@type": "BreadcrumbList",
@@ -51,6 +88,7 @@ export function SeoHead({ config }: SeoHeadProps) {
 
   const schemas = [
     buildOrganizationSchema(),
+    buildLocalBusinessSchema(),
     buildBreadcrumbSchema(config.breadcrumbs),
     config.extraSchema,
   ].filter(Boolean);
