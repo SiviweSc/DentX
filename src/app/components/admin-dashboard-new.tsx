@@ -58,11 +58,13 @@ import {
 import { format } from "date-fns";
 import { toast } from "sonner";
 import {
+  type BlockedSlotFrequency,
   DEFAULT_AVAILABILITY_CONFIG,
   fetchAvailabilityConfig,
   fetchServiceCatalog,
   getAvailableTimeSlots,
   isOperatingHoursRangeValid,
+  type OperatingDayKey,
   OPERATING_DAYS,
   SERVICE_CATALOG,
   updateAvailabilityConfig,
@@ -356,6 +358,14 @@ function AvailabilitySettingsPanel({
   const [serviceCatalog, setServiceCatalog] = useState(SERVICE_CATALOG);
   const [loadingAvailability, setLoadingAvailability] = useState(true);
   const [savingKey, setSavingKey] = useState<string | null>(null);
+  const [blockReason, setBlockReason] = useState("Lunch break");
+  const [blockFrequency, setBlockFrequency] =
+    useState<BlockedSlotFrequency>("weekly");
+  const [blockDate, setBlockDate] = useState("");
+  const [blockDayOfWeek, setBlockDayOfWeek] =
+    useState<OperatingDayKey>("monday");
+  const [blockStart, setBlockStart] = useState("12:00");
+  const [blockEnd, setBlockEnd] = useState("13:00");
 
   useEffect(() => {
     const loadAvailability = async () => {
@@ -380,10 +390,12 @@ function AvailabilitySettingsPanel({
     key: string,
   ) => {
     try {
+      setSavingKey(key);
       const savedConfig = await updateAvailabilityConfig(nextConfig, authToken);
       setAvailabilityConfig(savedConfig);
       setAvailabilityConfig(await fetchAvailabilityConfig());
     } finally {
+      setSavingKey(null);
     }
   };
 
@@ -507,6 +519,61 @@ function AvailabilitySettingsPanel({
   const showHours = mode === "all" || mode === "hours";
   const showServices = mode === "all" || mode === "services";
 
+  const addBlockedRule = async () => {
+    if (!isOperatingHoursRangeValid(blockStart, blockEnd)) {
+      toast.error("Blocked time must be at least one 30-minute slot");
+      return;
+    }
+
+    if (blockFrequency === "once" && !blockDate) {
+      toast.error("Choose a date for a once-off block");
+      return;
+    }
+
+    const nextRule = {
+      id: `new-${Date.now()}`,
+      enabled: true,
+      reason: blockReason.trim() || "Blocked",
+      frequency: blockFrequency,
+      date: blockFrequency === "once" ? blockDate : null,
+      dayOfWeek: blockFrequency === "weekly" ? blockDayOfWeek : null,
+      start: blockStart,
+      end: blockEnd,
+    };
+
+    const nextConfig = {
+      ...availabilityConfig,
+      blockedSlots: [...(availabilityConfig.blockedSlots || []), nextRule],
+    };
+
+    setAvailabilityConfig(nextConfig);
+    await persistAvailability(nextConfig, "blocked:add");
+  };
+
+  const toggleBlockedRule = async (ruleId: string, enabled: boolean) => {
+    const nextConfig = {
+      ...availabilityConfig,
+      blockedSlots: (availabilityConfig.blockedSlots || []).map((rule) =>
+        rule.id === ruleId ? { ...rule, enabled } : rule,
+      ),
+    };
+
+    setAvailabilityConfig(nextConfig);
+    await persistAvailability(nextConfig, `blocked:toggle:${ruleId}`);
+  };
+
+  const deleteBlockedRule = async (ruleId: string) => {
+    const nextConfig = {
+      ...availabilityConfig,
+      blockedSlots: (availabilityConfig.blockedSlots || []).filter(
+        (rule) => rule.id !== ruleId,
+      ),
+    };
+
+    setAvailabilityConfig(nextConfig);
+    await persistAvailability(nextConfig, `blocked:delete:${ruleId}`);
+  };
+
   return (
     <div className="space-y-6">
       {showHours && (
@@ -611,6 +678,173 @@ function AvailabilitySettingsPanel({
                             className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#9A7B1D] disabled:bg-gray-100"
                           />
                         </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
+      {showHours && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Blocked Time Slots</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="rounded-lg border border-gray-200 p-4 space-y-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">
+                    Reason
+                  </label>
+                  <input
+                    type="text"
+                    value={blockReason}
+                    onChange={(e) => setBlockReason(e.target.value)}
+                    placeholder="Lunch break"
+                    className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#9A7B1D]"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">
+                    Frequency
+                  </label>
+                  <select
+                    value={blockFrequency}
+                    onChange={(e) =>
+                      setBlockFrequency(e.target.value as BlockedSlotFrequency)
+                    }
+                    className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#9A7B1D]"
+                  >
+                    <option value="weekly">Recurring weekly</option>
+                    <option value="once">Once-off</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                {blockFrequency === "weekly" ? (
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 mb-1">
+                      Day
+                    </label>
+                    <select
+                      value={blockDayOfWeek}
+                      onChange={(e) =>
+                        setBlockDayOfWeek(e.target.value as OperatingDayKey)
+                      }
+                      className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#9A7B1D]"
+                    >
+                      {OPERATING_DAYS.map((day) => (
+                        <option key={day.key} value={day.key}>
+                          {day.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                ) : (
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 mb-1">
+                      Date
+                    </label>
+                    <input
+                      type="date"
+                      value={blockDate}
+                      onChange={(e) => setBlockDate(e.target.value)}
+                      className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#9A7B1D]"
+                    />
+                  </div>
+                )}
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">
+                    From
+                  </label>
+                  <input
+                    type="time"
+                    step="1800"
+                    value={blockStart}
+                    onChange={(e) => setBlockStart(e.target.value)}
+                    className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#9A7B1D]"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">
+                    To
+                  </label>
+                  <input
+                    type="time"
+                    step="1800"
+                    value={blockEnd}
+                    onChange={(e) => setBlockEnd(e.target.value)}
+                    className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#9A7B1D]"
+                  />
+                </div>
+              </div>
+
+              <Button
+                type="button"
+                onClick={() => void addBlockedRule()}
+                disabled={savingKey === "blocked:add"}
+              >
+                Add blocked slot
+              </Button>
+            </div>
+
+            {(availabilityConfig.blockedSlots || []).length === 0 ? (
+              <p className="text-sm text-gray-500">
+                No blocked slots configured yet.
+              </p>
+            ) : (
+              <div className="space-y-2">
+                {(availabilityConfig.blockedSlots || []).map((rule) => {
+                  const dayLabel =
+                    OPERATING_DAYS.find((day) => day.key === rule.dayOfWeek)
+                      ?.label || "";
+
+                  return (
+                    <div
+                      key={rule.id}
+                      className="rounded-md border border-gray-200 px-3 py-3 flex flex-col gap-3 md:flex-row md:items-center md:justify-between"
+                    >
+                      <div>
+                        <p className="text-sm font-semibold text-gray-900">
+                          {rule.reason}
+                        </p>
+                        <p className="text-xs text-gray-600 mt-1">
+                          {rule.frequency === "weekly"
+                            ? `${dayLabel}, ${rule.start} - ${rule.end}`
+                            : `${rule.date || "Date"}, ${rule.start} - ${rule.end}`}
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <Badge
+                          className={
+                            rule.enabled
+                              ? "bg-red-100 text-red-800"
+                              : "bg-gray-100 text-gray-700"
+                          }
+                        >
+                          {rule.enabled ? "Blocked" : "Disabled"}
+                        </Badge>
+                        <Switch
+                          checked={rule.enabled}
+                          disabled={savingKey === `blocked:toggle:${rule.id}`}
+                          onCheckedChange={(checked) =>
+                            void toggleBlockedRule(rule.id, checked)
+                          }
+                        />
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="text-red-600 hover:text-red-700"
+                          disabled={savingKey === `blocked:delete:${rule.id}`}
+                          onClick={() => void deleteBlockedRule(rule.id)}
+                        >
+                          Remove
+                        </Button>
                       </div>
                     </div>
                   );

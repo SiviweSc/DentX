@@ -33,9 +33,23 @@ export interface OperatingHoursDayConfig {
   end: string;
 }
 
+export type BlockedSlotFrequency = "once" | "weekly";
+
+export interface BlockedSlotRule {
+  id: string;
+  enabled: boolean;
+  reason: string;
+  frequency: BlockedSlotFrequency;
+  date: string | null;
+  dayOfWeek: OperatingDayKey | null;
+  start: string;
+  end: string;
+}
+
 export interface AvailabilityConfig {
   services: Record<string, AvailabilityServiceConfig>;
   operatingHours: Record<OperatingDayKey, OperatingHoursDayConfig>;
+  blockedSlots: BlockedSlotRule[];
 }
 
 export const DEFAULT_APPOINTMENT_DURATION_MINUTES = 30;
@@ -247,6 +261,7 @@ export const DEFAULT_AVAILABILITY_CONFIG: AvailabilityConfig = {
     ]),
   ),
   operatingHours: DEFAULT_OPERATING_HOURS,
+  blockedSlots: [],
 };
 
 const cloneDefaultConfig = (): AvailabilityConfig =>
@@ -262,6 +277,69 @@ const normalizeTimeValue = (value: unknown, fallback: string) => {
   }
 
   return `${match[1]}:${match[2]}`;
+};
+
+const DATE_PART_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+
+const normalizeDatePart = (value: unknown) => {
+  const datePart = String(value || "").slice(0, 10);
+  return DATE_PART_PATTERN.test(datePart) ? datePart : "";
+};
+
+const toLocalDatePart = (date: Date) => {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+};
+
+const normalizeBlockedSlotFrequency = (value: unknown): BlockedSlotFrequency =>
+  value === "once" ? "once" : "weekly";
+
+const isUuidLike = (value: unknown) =>
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+    String(value || ""),
+  );
+
+const normalizeBlockedSlotRule = (
+  rule: unknown,
+  index: number,
+): BlockedSlotRule | null => {
+  const incoming = rule && typeof rule === "object" ? (rule as any) : {};
+  const frequency = normalizeBlockedSlotFrequency(incoming.frequency);
+  const dayOfWeek =
+    typeof incoming.dayOfWeek === "string" &&
+    OPERATING_DAYS.some((day) => day.key === incoming.dayOfWeek)
+      ? (incoming.dayOfWeek as OperatingDayKey)
+      : null;
+  const date = normalizeDatePart(incoming.date);
+  const start = normalizeTimeValue(incoming.start, "");
+  const end = normalizeTimeValue(incoming.end, "");
+
+  if (!isOperatingHoursRangeValid(start, end)) {
+    return null;
+  }
+
+  if (frequency === "weekly" && !dayOfWeek) {
+    return null;
+  }
+
+  if (frequency === "once" && !date) {
+    return null;
+  }
+
+  return {
+    id: isUuidLike(incoming.id)
+      ? String(incoming.id)
+      : `block-${index}-${frequency}-${dayOfWeek || date || "slot"}-${start}`,
+    enabled: incoming.enabled !== false,
+    reason: String(incoming.reason || "Blocked").trim() || "Blocked",
+    frequency,
+    date: frequency === "once" ? date : null,
+    dayOfWeek: frequency === "weekly" ? dayOfWeek : null,
+    start,
+    end,
+  };
 };
 
 export const timeStringToMinutes = (value: string) => {
@@ -309,6 +387,78 @@ export const getOperatingHoursForDate = (
   date: Date,
 ) => config.operatingHours[getOperatingDayKey(date)];
 
+const doesBlockedRuleApplyToDate = (rule: BlockedSlotRule, date: Date) => {
+  if (!rule.enabled) {
+    return false;
+  }
+
+  if (rule.frequency === "weekly") {
+    return rule.dayOfWeek === getOperatingDayKey(date);
+  }
+
+  const datePart = toLocalDatePart(date);
+  return !!rule.date && rule.date === datePart;
+};
+
+const getBlockedBaseSlotsForDate = (config: AvailabilityConfig, date: Date) => {
+  const blockedSlots = new Set<string>();
+  const blockedRules = Array.isArray(config.blockedSlots)
+    ? config.blockedSlots
+    : [];
+
+  for (const rule of blockedRules) {
+    if (!doesBlockedRuleApplyToDate(rule, date)) {
+      continue;
+    }
+
+    const startMinutes = timeStringToMinutes(rule.start);
+    const endMinutes = timeStringToMinutes(rule.end);
+
+    if (startMinutes === null || endMinutes === null) {
+      continue;
+    }
+
+    for (
+      let current = startMinutes;
+      current + BASE_SLOT_MINUTES <= endMinutes;
+      current += BASE_SLOT_MINUTES
+    ) {
+      const hours = String(Math.floor(current / 60)).padStart(2, "0");
+      const minutes = String(current % 60).padStart(2, "0");
+      blockedSlots.add(`${hours}:${minutes}`);
+    }
+  }
+
+  return blockedSlots;
+};
+
+const isSlotWindowBlocked = (
+  slotStartTime: string,
+  slotDurationMinutes: number,
+  blockedSlots: Set<string>,
+) => {
+  const slotStartMinutes = timeStringToMinutes(slotStartTime);
+
+  if (slotStartMinutes === null) {
+    return true;
+  }
+
+  for (
+    let current = slotStartMinutes;
+    current + BASE_SLOT_MINUTES <= slotStartMinutes + slotDurationMinutes;
+    current += BASE_SLOT_MINUTES
+  ) {
+    const hours = String(Math.floor(current / 60)).padStart(2, "0");
+    const minutes = String(current % 60).padStart(2, "0");
+
+    if (blockedSlots.has(`${hours}:${minutes}`)) {
+      return true;
+    }
+  }
+
+  return false;
+};
+
 export const getAvailableTimeSlots = (
   config: AvailabilityConfig,
   date: Date,
@@ -334,6 +484,7 @@ export const getAvailableTimeSlots = (
     return [];
   }
 
+  const blockedBaseSlots = getBlockedBaseSlotsForDate(config, date);
   const slots: string[] = [];
 
   for (
@@ -343,7 +494,13 @@ export const getAvailableTimeSlots = (
   ) {
     const hours = String(Math.floor(current / 60)).padStart(2, "0");
     const minutes = String(current % 60).padStart(2, "0");
-    slots.push(`${hours}:${minutes}`);
+    const startTime = `${hours}:${minutes}`;
+
+    if (
+      !isSlotWindowBlocked(startTime, slotDurationMinutes, blockedBaseSlots)
+    ) {
+      slots.push(startTime);
+    }
   }
 
   return slots;
@@ -460,6 +617,13 @@ export const normalizeAvailabilityConfig = (
     );
     normalizedDay.end = normalizeTimeValue(incomingDay?.end, normalizedDay.end);
   }
+
+  const incomingBlockedSlots = Array.isArray(config?.blockedSlots)
+    ? config.blockedSlots
+    : [];
+  normalized.blockedSlots = incomingBlockedSlots
+    .map((rule, index) => normalizeBlockedSlotRule(rule, index))
+    .filter((rule): rule is BlockedSlotRule => Boolean(rule));
 
   return normalized;
 };

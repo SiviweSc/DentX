@@ -967,6 +967,7 @@ const DEFAULT_AVAILABILITY_CONFIG = {
     friday: { enabled: true, start: "08:30", end: "16:30" },
     saturday: { enabled: true, start: "09:00", end: "13:30" },
   },
+  blockedSlots: [],
 };
 
 const DAY_INDEX_TO_KEY = [
@@ -981,6 +982,30 @@ const DAY_INDEX_TO_KEY = [
 
 const BASE_SLOT_MINUTES = 30;
 const DEFAULT_APPOINTMENT_DURATION_MINUTES = 30;
+const DATE_PART_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+
+const toLocalDatePart = (date: Date) => {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+};
+
+const normalizeDatePartValue = (value: unknown) => {
+  const datePart = String(value || "").slice(0, 10);
+  return DATE_PART_PATTERN.test(datePart) ? datePart : "";
+};
+
+const normalizeBlockedSlotFrequency = (value: unknown) =>
+  value === "once" ? "once" : "weekly";
+
+const isValidOperatingDayKey = (value: unknown) =>
+  typeof value === "string" && DAY_INDEX_TO_KEY.includes(value);
+
+const isUuidLike = (value: unknown) =>
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+    String(value || ""),
+  );
 
 const normalizeDurationMinutes = (
   value: unknown,
@@ -1097,6 +1122,100 @@ const isTimeWithinOperatingHours = (
     config.operatingHours?.[dayKey],
     normalizeDurationMinutes(slotDurationMinutes),
   ).includes(normalizeTimeValue(time, ""));
+};
+
+const doesBlockedRuleApplyToDate = (rule: any, date: Date) => {
+  if (!rule || rule.enabled === false) {
+    return false;
+  }
+
+  if (rule.frequency === "weekly") {
+    return rule.dayOfWeek === getOperatingDayKey(date);
+  }
+
+  return rule.date === toLocalDatePart(date);
+};
+
+const getBlockedBaseSlotsForDate = (config: any, date: Date) => {
+  const blocked = new Set<string>();
+  const blockedSlots = Array.isArray(config?.blockedSlots)
+    ? config.blockedSlots
+    : [];
+
+  for (const rule of blockedSlots) {
+    if (!doesBlockedRuleApplyToDate(rule, date)) {
+      continue;
+    }
+
+    const startMinutes = timeStringToMinutes(rule.start);
+    const endMinutes = timeStringToMinutes(rule.end);
+
+    if (startMinutes === null || endMinutes === null) {
+      continue;
+    }
+
+    for (
+      let current = startMinutes;
+      current + BASE_SLOT_MINUTES <= endMinutes;
+      current += BASE_SLOT_MINUTES
+    ) {
+      const hours = String(Math.floor(current / 60)).padStart(2, "0");
+      const minutes = String(current % 60).padStart(2, "0");
+      blocked.add(`${hours}:${minutes}`);
+    }
+  }
+
+  return blocked;
+};
+
+const isTimeWindowBlocked = (
+  startTime: string,
+  durationMinutes: number,
+  blockedSlots: Set<string>,
+) => {
+  const startMinutes = timeStringToMinutes(startTime);
+  if (startMinutes === null) {
+    return true;
+  }
+
+  const normalizedDuration = normalizeDurationMinutes(durationMinutes);
+
+  for (
+    let current = startMinutes;
+    current + BASE_SLOT_MINUTES <= startMinutes + normalizedDuration;
+    current += BASE_SLOT_MINUTES
+  ) {
+    const hours = String(Math.floor(current / 60)).padStart(2, "0");
+    const minutes = String(current % 60).padStart(2, "0");
+    if (blockedSlots.has(`${hours}:${minutes}`)) {
+      return true;
+    }
+  }
+
+  return false;
+};
+
+const isTimeWithinBookableWindow = (
+  config: any,
+  date: Date,
+  time: string,
+  slotDurationMinutes = BASE_SLOT_MINUTES,
+) => {
+  if (!isTimeWithinOperatingHours(config, date, time, slotDurationMinutes)) {
+    return false;
+  }
+
+  const normalizedTime = normalizeTimeValue(time, "");
+  if (!normalizedTime) {
+    return false;
+  }
+
+  const blockedSlots = getBlockedBaseSlotsForDate(config, date);
+  return !isTimeWindowBlocked(
+    normalizedTime,
+    slotDurationMinutes,
+    blockedSlots,
+  );
 };
 
 const getServicePractitionerDurationMinutes = (
@@ -1775,20 +1894,70 @@ const normalizeAvailabilityConfig = (config: any) => {
     dayConfig.end = normalizeTimeValue(incomingDay?.end, dayConfig.end);
   }
 
+  const incomingBlockedSlots = Array.isArray(config?.blockedSlots)
+    ? config.blockedSlots
+    : [];
+
+  normalized.blockedSlots = incomingBlockedSlots
+    .map((rule: any, index: number) => {
+      const frequency = normalizeBlockedSlotFrequency(rule?.frequency);
+      const start = normalizeTimeValue(rule?.start, "");
+      const end = normalizeTimeValue(rule?.end, "");
+
+      if (!isOperatingHoursRangeValid(start, end)) {
+        return null;
+      }
+
+      const dayOfWeek = isValidOperatingDayKey(rule?.dayOfWeek)
+        ? String(rule.dayOfWeek)
+        : null;
+      const date = normalizeDatePartValue(rule?.date);
+
+      if (frequency === "weekly" && !dayOfWeek) {
+        return null;
+      }
+
+      if (frequency === "once" && !date) {
+        return null;
+      }
+
+      return {
+        id: String(rule?.id || `block-${index}`),
+        enabled: rule?.enabled !== false,
+        reason: String(rule?.reason || "Blocked").trim() || "Blocked",
+        frequency,
+        date: frequency === "once" ? date : null,
+        dayOfWeek: frequency === "weekly" ? dayOfWeek : null,
+        start,
+        end,
+      };
+    })
+    .filter(Boolean);
+
   return normalized;
 };
 
 const fetchAvailabilityConfigFromDb = async (supabase: any) => {
-  const [servicesResult, practitionersResult, operatingHoursResult] =
-    await Promise.all([
-      supabase.from("service_availability").select("service_id, enabled"),
-      supabase
-        .from("practitioner_availability")
-        .select("service_id, practitioner_id, enabled, duration_minutes"),
-      supabase
-        .from("operating_hours")
-        .select("day_of_week, enabled, start_time, end_time"),
-    ]);
+  const [
+    servicesResult,
+    practitionersResult,
+    operatingHoursResult,
+    blockedSlotsResult,
+  ] = await Promise.all([
+    supabase.from("service_availability").select("service_id, enabled"),
+    supabase
+      .from("practitioner_availability")
+      .select("service_id, practitioner_id, enabled, duration_minutes"),
+    supabase
+      .from("operating_hours")
+      .select("day_of_week, enabled, start_time, end_time"),
+    supabase
+      .from("blocked_time_slots")
+      .select(
+        "id, enabled, reason, frequency, blocked_date, day_of_week, start_time, end_time",
+      )
+      .order("created_at", { ascending: true }),
+  ]);
 
   const config = {
     services: {} as Record<
@@ -1802,6 +1971,16 @@ const fetchAvailabilityConfigFromDb = async (supabase: any) => {
     operatingHours: JSON.parse(
       JSON.stringify(DEFAULT_AVAILABILITY_CONFIG.operatingHours),
     ),
+    blockedSlots: [] as Array<{
+      id: string;
+      enabled: boolean;
+      reason: string;
+      frequency: "once" | "weekly";
+      date: string | null;
+      dayOfWeek: string | null;
+      start: string;
+      end: string;
+    }>,
   };
 
   for (const [serviceId, serviceConfig] of Object.entries(
@@ -1872,6 +2051,46 @@ const fetchAvailabilityConfigFromDb = async (supabase: any) => {
         };
       }
     }
+  }
+
+  if (!blockedSlotsResult.error) {
+    for (const row of blockedSlotsResult.data || []) {
+      const frequency = normalizeBlockedSlotFrequency(row.frequency);
+      const dayOfWeekKey =
+        Number.isInteger(row.day_of_week) && DAY_INDEX_TO_KEY[row.day_of_week]
+          ? DAY_INDEX_TO_KEY[row.day_of_week]
+          : null;
+      const datePart = normalizeDatePartValue(row.blocked_date);
+      const start = normalizeTimeValue(row.start_time, "");
+      const end = normalizeTimeValue(row.end_time, "");
+
+      if (!isOperatingHoursRangeValid(start, end)) {
+        continue;
+      }
+
+      if (frequency === "weekly" && !dayOfWeekKey) {
+        continue;
+      }
+
+      if (frequency === "once" && !datePart) {
+        continue;
+      }
+
+      config.blockedSlots.push({
+        id: String(row.id),
+        enabled: row.enabled !== false,
+        reason: String(row.reason || "Blocked").trim() || "Blocked",
+        frequency,
+        date: frequency === "once" ? datePart : null,
+        dayOfWeek: frequency === "weekly" ? dayOfWeekKey : null,
+        start,
+        end,
+      });
+    }
+  } else if (
+    String((blockedSlotsResult.error as any)?.code || "") !== "42P01"
+  ) {
+    throw blockedSlotsResult.error;
   }
 
   return normalizeAvailabilityConfig(config);
@@ -2105,6 +2324,33 @@ app.put(
         end_time: dayConfig.end,
       }));
 
+      const blockedSlotRows = (normalizedConfig.blockedSlots || []).map(
+        (rule: any) => {
+          const row: Record<string, any> = {
+            enabled: rule.enabled !== false,
+            reason: String(rule.reason || "Blocked").trim() || "Blocked",
+            frequency: normalizeBlockedSlotFrequency(rule.frequency),
+            blocked_date:
+              normalizeBlockedSlotFrequency(rule.frequency) === "once"
+                ? normalizeDatePartValue(rule.date)
+                : null,
+            day_of_week:
+              normalizeBlockedSlotFrequency(rule.frequency) === "weekly"
+                ? DAY_INDEX_TO_KEY.indexOf(String(rule.dayOfWeek || ""))
+                : null,
+            start_time: normalizeTimeValue(rule.start, ""),
+            end_time: normalizeTimeValue(rule.end, ""),
+            updated_at: new Date().toISOString(),
+          };
+
+          if (isUuidLike(rule.id)) {
+            row.id = String(rule.id);
+          }
+
+          return row;
+        },
+      );
+
       const { error: servicesError } = await supabase
         .from("service_availability")
         .upsert(serviceRows, { onConflict: "service_id" });
@@ -2131,7 +2377,60 @@ app.put(
         throw operatingHoursError;
       }
 
-      return c.json({ success: true, config: normalizedConfig });
+      const { data: existingBlockedRows, error: existingBlockedRowsError } =
+        await supabase.from("blocked_time_slots").select("id");
+
+      if (
+        existingBlockedRowsError &&
+        String((existingBlockedRowsError as any)?.code || "") !== "42P01"
+      ) {
+        throw existingBlockedRowsError;
+      }
+
+      if (
+        existingBlockedRowsError &&
+        String((existingBlockedRowsError as any)?.code || "") === "42P01"
+      ) {
+        throw new Error(
+          "blocked_time_slots table is missing. Run the latest migration.",
+        );
+      }
+
+      const incomingIds = new Set(
+        blockedSlotRows
+          .map((row: any) => String(row.id || ""))
+          .filter((value: string) => isUuidLike(value)),
+      );
+
+      const idsToDelete = (existingBlockedRows || [])
+        .map((row: any) => String(row.id || ""))
+        .filter((id: string) => !incomingIds.has(id));
+
+      if (idsToDelete.length > 0) {
+        const { error: deleteBlockedError } = await supabase
+          .from("blocked_time_slots")
+          .delete()
+          .in("id", idsToDelete);
+
+        if (deleteBlockedError) {
+          throw deleteBlockedError;
+        }
+      }
+
+      if (blockedSlotRows.length > 0) {
+        const { error: upsertBlockedError } = await supabase
+          .from("blocked_time_slots")
+          .upsert(blockedSlotRows, { onConflict: "id" });
+
+        if (upsertBlockedError) {
+          throw upsertBlockedError;
+        }
+      }
+
+      return c.json({
+        success: true,
+        config: await fetchAvailabilityConfigFromDb(supabase),
+      });
     } catch (error) {
       console.error("Availability update error:", error);
       return c.json(
@@ -2310,14 +2609,17 @@ app.post("/make-server-34100c2d/bookings", async (c) => {
     }
 
     if (
-      !isTimeWithinOperatingHours(
+      !isTimeWithinBookableWindow(
         availabilityConfig,
         bookingDate,
         bookingTime,
         bookingDurationMinutes,
       )
     ) {
-      return c.json({ error: "That time is outside operating hours" }, 400);
+      return c.json(
+        { error: "That time is outside operating hours or currently blocked" },
+        400,
+      );
     }
 
     if (shouldConfirmImmediately) {
@@ -3102,7 +3404,9 @@ app.put("/make-server-34100c2d/bookings/:id", requireAuth, async (c) => {
     const { data: existingBooking, error: existingBookingError } =
       await supabase
         .from("bookings")
-        .select("id, date, time, status, assigned_doctor_id")
+        .select(
+          "id, date, time, status, assigned_doctor_id, service_type, practitioner_type",
+        )
         .eq("id", bookingId)
         .single();
 
@@ -3255,6 +3559,54 @@ app.put("/make-server-34100c2d/bookings/:id", requireAuth, async (c) => {
       updates.assigned_doctor_username = null;
       updates.assigned_at = null;
       updates.confirmed_at = null;
+    }
+
+    const bookingDatePart = getDatePart(
+      String(updates?.date || existingBooking.date || ""),
+    );
+    const bookingTime = normalizeTimeValue(
+      updates?.time || existingBooking.time,
+      "",
+    );
+
+    const isReschedulingRequest =
+      typeof updates?.date === "string" ||
+      typeof updates?.time === "string" ||
+      typeof updates?.service_type === "string" ||
+      typeof updates?.practitioner_type === "string";
+
+    if (isReschedulingRequest) {
+      if (!bookingDatePart || !bookingTime) {
+        return c.json({ error: "Invalid booking date or time" }, 400);
+      }
+
+      const availabilityConfig = await fetchAvailabilityConfigFromDb(supabase);
+      const bookingDate = new Date(`${bookingDatePart}T12:00:00`);
+      const requestedDurationMinutes = getBookingDurationMinutes(
+        availabilityConfig,
+        {
+          service_type: updates?.service_type || existingBooking.service_type,
+          practitioner_type:
+            updates?.practitioner_type || existingBooking.practitioner_type,
+        },
+      );
+
+      if (
+        !isTimeWithinBookableWindow(
+          availabilityConfig,
+          bookingDate,
+          bookingTime,
+          requestedDurationMinutes,
+        )
+      ) {
+        return c.json(
+          {
+            error:
+              "The selected time is outside operating hours or currently blocked.",
+          },
+          409,
+        );
+      }
     }
 
     // Update booking
