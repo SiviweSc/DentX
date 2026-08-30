@@ -2644,7 +2644,7 @@ function BookingsContent({
         const newDateStr = format(new Date(newDateTime.date), "PPP");
         message = `🔄 BOOKING RESCHEDULED - DentX Quarters\n\nHello ${booking.first_name},\n\nYour appointment has been rescheduled:\n\nOLD APPOINTMENT:\nDate: ${dateStr}\nTime: ${booking.time}\n\nNEW APPOINTMENT:\nDate: ${newDateStr}\nTime: ${newDateTime.time}\n\nService: ${booking.service_type?.replace("-", " ")}\nPractitioner: ${booking.practitioner_type?.replace("-", " ")}\n\nPlease confirm receipt.\n\nDentX Quarters\n+27 68 534 0763`;
       } else if (action === "completed") {
-        message = `Thank you for visiting DentXQuarters, please rate our services\nhttps://g.page/r/Ceri1JucBLYHEAI/review`;
+        message = `Thank you for choosing DentXQuarters! 🦷✨\nWe’d love to hear about your experience. Please take a moment to rate our services and share your feedback:\nhttps://g.page/r/Ceri1JucBLYHEAI/review\nYour feedback helps us continue providing the best possible care to our patients. 💙`;
       }
 
       const whatsappUrl = `https://wa.me/${customerPhone}?text=${encodeURIComponent(message)}`;

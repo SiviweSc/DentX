@@ -1121,8 +1121,7 @@ export function BookingCalendar({
 
       const customerPhone = toWhatsAppPhone(selectedBooking.phone || "");
       if (customerPhone) {
-        const message =
-          "Thank you for visiting DentXQuarters, please rate our services\nhttps://g.page/r/Ceri1JucBLYHEAI/review";
+        const message = `Thank you for choosing DentXQuarters! 🦷✨\nWe’d love to hear about your experience. Please take a moment to rate our services and share your feedback:\nhttps://g.page/r/Ceri1JucBLYHEAI/review\nYour feedback helps us continue providing the best possible care to our patients. 💙`;
         const whatsappUrl = `https://wa.me/${customerPhone}?text=${encodeURIComponent(message)}`;
         window.open(whatsappUrl, "_blank");
       }
