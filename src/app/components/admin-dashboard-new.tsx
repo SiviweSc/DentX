@@ -2643,6 +2643,8 @@ function BookingsContent({
       } else if (action === "rescheduled" && newDateTime) {
         const newDateStr = format(new Date(newDateTime.date), "PPP");
         message = `🔄 BOOKING RESCHEDULED - DentX Quarters\n\nHello ${booking.first_name},\n\nYour appointment has been rescheduled:\n\nOLD APPOINTMENT:\nDate: ${dateStr}\nTime: ${booking.time}\n\nNEW APPOINTMENT:\nDate: ${newDateStr}\nTime: ${newDateTime.time}\n\nService: ${booking.service_type?.replace("-", " ")}\nPractitioner: ${booking.practitioner_type?.replace("-", " ")}\n\nPlease confirm receipt.\n\nDentX Quarters\n+27 68 534 0763`;
+      } else if (action === "completed") {
+        message = `Thank you for visiting DentXQuarters, please rate our services\nhttps://g.page/r/Ceri1JucBLYHEAI/review`;
       }
 
       const whatsappUrl = `https://wa.me/${customerPhone}?text=${encodeURIComponent(message)}`;
@@ -2919,6 +2921,9 @@ function BookingsContent({
         description: `Booking completed for ${booking.first_name} ${booking.last_name}`,
         booking_id: booking.id,
       });
+
+      // Send WhatsApp notification to CUSTOMER
+      await sendWhatsAppNotification(booking, "completed");
 
       toast.success("Booking marked as completed");
       fetchBookings();

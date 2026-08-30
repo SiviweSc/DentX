@@ -143,6 +143,16 @@ function normalizePhoneValue(value: string) {
     .replace(/[^\d+]/g, "");
 }
 
+function toWhatsAppPhone(value: string) {
+  const normalized = normalizePhoneValue(value).replace(/^\+/, "");
+
+  if (normalized.startsWith("0")) {
+    return `27${normalized.slice(1)}`;
+  }
+
+  return normalized;
+}
+
 function getBookingStatusPriority(status: string) {
   switch (String(status || "").toLowerCase()) {
     case "completed":
@@ -1107,6 +1117,14 @@ export function BookingCalendar({
       if (!lastResponse.ok || !data.success) {
         toast.error(data.error || "Failed to complete booking");
         return;
+      }
+
+      const customerPhone = toWhatsAppPhone(selectedBooking.phone || "");
+      if (customerPhone) {
+        const message =
+          "Thank you for visiting DentXQuarters, please rate our services\nhttps://g.page/r/Ceri1JucBLYHEAI/review";
+        const whatsappUrl = `https://wa.me/${customerPhone}?text=${encodeURIComponent(message)}`;
+        window.open(whatsappUrl, "_blank");
       }
 
       toast.success("Booking marked as completed");
